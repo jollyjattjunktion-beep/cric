@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.pyc
+.git/
+.claude/
+*.mp4
+*.png
+recordings/*.mp3
+.env
+.DS_Store
