@@ -213,8 +213,16 @@ class CrexParser:
             "Referer": self.url,
             "Accept": "application/json, text/plain, */*",
             "Content-Type": "application/json",
+            # CREX's own browser client includes these headers on its ball-feed request.
+            "authorization": (
+                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImV4cGlyZXNJbiI6IjM2NWQifQ."
+                "eyJ0aW1lIjoxNjYwMDQ2NjIwMDAwfQ."
+                "bTEmMWlR7hLRUHxPPq6-1TP7cuuW7m6sZ9jcdbYzLRA"
+            ),
+            "cc": "IN",
+            "version": "96.0.0",
         }
-        payload = {"matchKey": match_key, "lastDocId": None, "filters": {}}
+        payload = {"matchKey": match_key, "lastDocId": None, "filters": {}, "lang": "en"}
 
         try:
             if session and not session.closed:
