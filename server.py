@@ -595,12 +595,41 @@ class BroadcastHub:
                         "pitch": pitch,
                         "radio_text_preview": radio_text[:180],
                     }
-                    try:
-                        mp3_data = await asyncio.wait_for(
-                            tts.speak_mp3(radio_text, rate=rate, pitch=pitch),
-                            timeout=8.0,
-                        )
-                    except asyncio.TimeoutError:
+                    # Race TTS synthesis against the next delivery. If the match updates
+                    # first, cancel old synthesis immediately instead of making the newest ball
+                    # wait for a stale sentence to finish generating.
+                    tts_task = asyncio.create_task(
+                        tts.speak_mp3(radio_text, rate=rate, pitch=pitch)
+                    )
+                    next_delivery_task = asyncio.create_task(ball_queue.get())
+                    done, _ = await asyncio.wait(
+                        {tts_task, next_delivery_task},
+                        timeout=8.0,
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+
+                    if next_delivery_task in done:
+                        event = next_delivery_task.result()
+
+                    if current_event["version"] != latest_event_version:
+                        if not tts_task.done():
+                            tts_task.cancel()
+                        if not next_delivery_task.done():
+                            next_delivery_task.cancel()
+                        await asyncio.gather(tts_task, next_delivery_task, return_exceptions=True)
+                        self.latest_tts_debug.update({
+                            "status": "dropped_stale",
+                            "over": ball_over,
+                            "note": "A newer delivery arrived; stale synthesis was cancelled.",
+                        })
+                        continue
+
+                    if tts_task not in done:
+                        if not tts_task.done():
+                            tts_task.cancel()
+                        if not next_delivery_task.done():
+                            next_delivery_task.cancel()
+                        await asyncio.gather(tts_task, next_delivery_task, return_exceptions=True)
                         self.latest_tts_debug.update({
                             "status": "timeout",
                             "error": "TTS exceeded the 8-second low-latency limit",
@@ -608,6 +637,12 @@ class BroadcastHub:
                         })
                         logger.warning("TTS timed out for ball %s; waiting for the next delivery", ball_over)
                         continue
+
+                    if next_delivery_task not in done:
+                        next_delivery_task.cancel()
+                        await asyncio.gather(next_delivery_task, return_exceptions=True)
+
+                    mp3_data = tts_task.result()
                     if not mp3_data:
                         self.latest_tts_debug["status"] = "empty_audio"
                         logger.warning("TTS returned empty audio for ball %s", ball_over)
