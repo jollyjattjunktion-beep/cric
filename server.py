@@ -253,7 +253,10 @@ def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str) 
         wickets += w
 
     spoken_over = over_index + 1
-    if lang in ("hi", "hinglish"):
+    if lang == "hinglish":
+        return (f"Over {spoken_over} complete! Is over mein {runs} runs aaye — "
+                f"{fours} fours, {sixes} sixes aur {wickets} wickets.")
+    if lang == "hi":
         four_word = "चौका" if fours == 1 else "चौके"
         six_word = "छक्का" if sixes == 1 else "छक्के"
         return (f"ओवर {spoken_over} पूरा हुआ। इस ओवर में {runs} रन, "
@@ -507,7 +510,8 @@ class BroadcastHub:
             if not mp3_data:
                 logger.warning("TTS returned empty audio for event type %s", kind)
                 return None
-            duration = max(1.2, len(mp3_data) / 16000.0)
+            bytes_per_second = 6000.0 if tts_provider == "edge" else 16000.0
+            duration = max(0.9, len(mp3_data) / bytes_per_second)
             audio_url = "data:audio/mpeg;base64," + base64.b64encode(mp3_data).decode("ascii")
             self.latest_commentary = text
             await self.broadcast_ws("commentary", {
@@ -562,9 +566,8 @@ class BroadcastHub:
                         logger.info("Skipping delivery %s because CREX has no source commentary text yet", ball_over)
                         continue
 
-                    # Use the commentator only to classify the delivery for badge/rate/pitch.
-                    # Crucially, its rewritten `spoken_text` is NOT used: audio is the source
-                    # CREX commentary text verbatim (apart from whitespace normalization).
+                    # The visual feed keeps the original CREX text. The speaker uses a short,
+                    # locally built radio call so Edge can synthesize it much sooner.
                     metadata = commentator.humanize(
                         source_text,
                         ball_info={**current_event["fresh_data"], **ball,
@@ -572,12 +575,10 @@ class BroadcastHub:
                         lang=lang
                     )
                     metadata = metadata or {}
+                    radio_text = _normal_space(metadata.get("spoken_text") or source_text)
                     badge = metadata.get("badge") or _source_badge(ball)
-                    rate = metadata.get("rate") or "+8%"
-                    pitch = metadata.get("pitch") or "+0Hz"
-                    matchup = _normal_space(ball.get("matchup"))
-
-                    # The poll loop already published this source line to the visual feed.
+                    rate = metadata.get("rate") or "+15%"
+                    pitch = metadata.get("pitch") or "+10Hz"
 
                     self.latest_tts_debug = {
                         "status": "generating",
@@ -585,9 +586,11 @@ class BroadcastHub:
                         "voice": getattr(tts, "voice", None) or getattr(tts, "speaker", None),
                         "language": lang,
                         "over": ball_over,
-                        "text_length": len(source_text),
+                        "source_text_length": len(source_text),
+                        "radio_text_length": len(radio_text),
+                        "text_length": len(radio_text),
                     }
-                    mp3_data = await tts.speak_mp3(source_text, rate=rate, pitch=pitch)
+                    mp3_data = await tts.speak_mp3(radio_text, rate=rate, pitch=pitch)
                     if not mp3_data:
                         self.latest_tts_debug["status"] = "empty_audio"
                         logger.warning("TTS returned empty audio for ball %s", ball_over)
@@ -596,11 +599,13 @@ class BroadcastHub:
                         logger.info("TTS completed for old ball %s; discarding audio before broadcast", ball_over)
                         continue
 
-                    duration = max(1.2, len(mp3_data) / 16000.0)
+                    # Edge TTS returns 48-kbit/s MP3; Sarvam's MP3 export is 128-kbit/s.
+                    bytes_per_second = 6000.0 if tts_provider == "edge" else 16000.0
+                    duration = max(0.9, len(mp3_data) / bytes_per_second)
                     audio_url = "data:audio/mpeg;base64," + base64.b64encode(mp3_data).decode("ascii")
-                    self.latest_commentary = source_text
+                    self.latest_commentary = radio_text
                     await self.broadcast_ws("commentary", {
-                        "text": source_text,
+                        "text": radio_text,
                         "badge": badge,
                         "audio_url": audio_url,
                         "duration": round(duration, 1),
@@ -711,16 +716,11 @@ class BroadcastHub:
                                     "commentary": _normal_space(latest_ball.get("commentary")),
                                 })
 
+                            # Seed the current page snapshot only. Its latest visible ball
+                            # may be historical; speech starts only after the next new delivery.
                             last_latest_key = latest_key
                             last_latest_ball = latest_ball
                             last_latest_state = fresh_data
-                            latest_event_version += 1
-                            await queue_latest({
-                                "version": latest_event_version,
-                                "ball": latest_ball,
-                                "fresh_data": fresh_data,
-                                "over_announcements": [],
-                            })
 
                         elif latest_ball:
                             latest_key = _ball_identity(latest_ball)
