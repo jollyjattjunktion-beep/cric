@@ -6,6 +6,7 @@ never written to disk.
 """
 import os
 import json
+import html
 import base64
 import asyncio
 import logging
@@ -33,6 +34,142 @@ logger = logging.getLogger("WebServer")
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR  # Flat project: index.html, app.js and style.css sit beside server.py.
+
+
+def _walk_nested_objects(value):
+    """Walk dictionaries and lists from CREX app-root-state."""
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk_nested_objects(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_nested_objects(child)
+
+
+def _parse_crex_state_json(raw):
+    """Parse CREX's Angular app-root-state transport JSON safely."""
+    if not raw:
+        return None
+    raw = raw.strip()
+    replacements = {"q": '"', "a": "&", "s": "'", "l": "<", "g": ">"}
+    candidates = [raw]
+    candidates.append(re.sub(r"&(q|a|s|l|g);", lambda m: replacements[m.group(1)], raw))
+    entities = {"quot": '"', "amp": "&", "apos": "'", "lt": "<", "gt": ">", "#34": '"', "#39": "'"}
+    candidates.append(re.sub(r"&(quot|amp|apos|lt|gt|#34|#39);", lambda m: entities[m.group(1)], raw))
+    for candidate in candidates:
+        try:
+            value = json.loads(candidate)
+            if isinstance(value, (dict, list)):
+                return value
+        except Exception:
+            continue
+    return None
+
+
+def _clean_crex_text(value):
+    text = html.unescape(str(value or ""))
+    text = re.sub(r"<[^>]+>", " ", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _extract_crex_state_balls(html_text):
+    """Extract actual source-commentary deliveries from CREX app-root-state."""
+    try:
+        from bs4 import BeautifulSoup
+        soup = BeautifulSoup(html_text or "", "lxml")
+        state_tag = soup.find("script", id="app-root-state")
+        scripts = [state_tag] if state_tag else []
+        scripts.extend(tag for tag in soup.find_all("script") if tag is not state_tag)
+
+        states = []
+        for tag in scripts:
+            if tag is None:
+                continue
+            raw = tag.string or tag.get_text("", strip=False)
+            if not raw or len(raw) > 5_000_000:
+                continue
+            lower = raw.lower()
+            if tag is not state_tag and not any(
+                marker in lower for marker in ("getballfeeds", "ballfeeds", "app-root-state")
+            ):
+                continue
+            value = _parse_crex_state_json(raw)
+            if value is not None:
+                states.append(value)
+                if tag is state_tag:
+                    break
+        if not states:
+            return []
+
+        state = states[0]
+        feed_values = []
+        for node in _walk_nested_objects(state):
+            for key, value in node.items():
+                if "getballfeeds" in str(key).lower() or "ballfeeds" in str(key).lower():
+                    feed_values.append(value)
+
+        def item_lists(value):
+            if isinstance(value, list):
+                # Feed entries have the distinctive source fields o/b/c2.
+                if any(isinstance(item, dict) and
+                       ("c2" in item or "commentary" in item or "description" in item) and
+                       ("o" in item or "over" in item) for item in value):
+                    yield value
+                for child in value:
+                    yield from item_lists(child)
+            elif isinstance(value, dict):
+                for child in value.values():
+                    yield from item_lists(child)
+
+        if not feed_values:
+            # Fallback when a bundle changes the endpoint's exact key but the objects
+            # remain embedded inside app-root-state.
+            feed_values = [state]
+
+        output = []
+        seen = set()
+        for feed in feed_values:
+            for records in item_lists(feed):
+                for item in records:
+                    if not isinstance(item, dict):
+                        continue
+                    if str(item.get("type", "b")).lower() not in ("b", "ball", "delivery"):
+                        continue
+                    over = _clean_crex_text(item.get("o", item.get("over", "")))
+                    run_token = _clean_crex_text(item.get("b", item.get("runs", ""))).upper()
+                    matchup = _clean_crex_text(item.get("c1", item.get("matchup", "")))
+                    commentary = _clean_crex_text(
+                        item.get("c2", item.get("commentary", item.get("description", item.get("c", ""))))
+                    )
+                    if not commentary:
+                        continue
+                    if not over:
+                        on = item.get("on")
+                        if isinstance(on, int) and on >= 0:
+                            over = f"{on // 6}.{on % 6 + 1}"
+                    if not over:
+                        continue
+                    identity = (over, run_token, matchup, commentary)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    spoken = f"Over {over}: {matchup}. {commentary}" if matchup else f"Over {over}: {commentary}"
+                    output.append({
+                        "over": over,
+                        "matchup": matchup,
+                        "runs": run_token,
+                        "commentary": commentary,
+                        "spoken_line": spoken,
+                    })
+        if output:
+            logger.info("CREX app-root-state extracted %d delivery commentary items; latest=%s",
+                        len(output), output[-1].get("over"))
+        return output
+    except Exception:
+        logger.exception("Could not parse CREX app-root-state commentary.")
+        return []
+
 
 
 # ---------------- Current-ball-only speech helpers ----------------
@@ -448,14 +585,29 @@ class BroadcastHub:
                         fresh_data = parser.parse(html_text)
                         raw_balls = fresh_data.get("balls") or []
 
-                        # If this CREX page renders the scorecard but not commentary HTML,
-                        # ask the same JSON feed used by CREX's frontend. Still speak only its text.
+                        # First inspect CREX's embedded app-root-state: it is often populated
+                        # even when the visible commentary cards are not server-rendered.
+                        if not raw_balls:
+                            state_balls = _extract_crex_state_balls(html_text)
+                            if state_balls:
+                                raw_balls = state_balls
+                                fresh_data["balls"] = state_balls
+                                fresh_data["paragraphs"] = [b.get("spoken_line", "") for b in state_balls]
+
+                        # If there is still no source text, try CREX's own live commentary endpoint.
                         if not raw_balls:
                             feed_balls = await parser.fetch_ball_feeds_async(session=session)
                             if feed_balls:
                                 raw_balls = feed_balls
                                 fresh_data["balls"] = feed_balls
                                 fresh_data["paragraphs"] = [b.get("spoken_line", "") for b in feed_balls]
+                            else:
+                                logger.warning(
+                                    "No source ball commentary found. URL=%s; scoreboard=%s/%s at %s overs. "
+                                    "Check whether CREX's app-root-state or commentary endpoint response has changed.",
+                                    url, fresh_data.get("total_runs"), fresh_data.get("total_wickets"),
+                                    fresh_data.get("overs")
+                                )
 
                         self.latest_match_state = fresh_data
                         await self.broadcast_ws("match_state", fresh_data)
