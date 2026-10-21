@@ -872,32 +872,57 @@ async def handle_api_resolve(request: web.Request) -> web.Response:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 async def handle_api_start(request: web.Request) -> web.Response:
+    # Record entry before validation so /api/status can prove whether the browser
+    # actually reached this endpoint, even when the JSON body or form values fail.
+    hub.latest_start_debug = {
+        "status": "api_start_received",
+        "phase": "request_entered",
+        "method": request.method,
+        "path": request.path,
+    }
     try:
         body = await request.json()
-        url = body.get("url", "").strip()
-        lang = body.get("lang", "hi")
-        stream_key = body.get("stream_key", "")
-        tts_provider = body.get("tts_provider", "edge").strip() or "edge"
-        tts_api_key = body.get("sarvam_api_key", "").strip() or os.getenv("SARVAM_API_KEY", "").strip()
-        tts_speaker = body.get("sarvam_speaker", "").strip()
+        url = str(body.get("url", "") or "").strip()
+        lang = str(body.get("lang", "hi") or "hi").strip()
+        stream_key = str(body.get("stream_key", "") or "").strip()
+        tts_provider = str(body.get("tts_provider", "edge") or "edge").strip() or "edge"
+        tts_api_key = str(body.get("sarvam_api_key", "") or "").strip() or os.getenv("SARVAM_API_KEY", "").strip()
+        tts_speaker = str(body.get("sarvam_speaker", "") or "").strip()
+
+        hub.latest_start_debug.update({
+            "phase": "request_validated",
+            "url": url[:320],
+            "language": lang,
+            "voice_engine": tts_provider,
+        })
+        logger.info("Received /api/start request (url=%s, lang=%s, tts_provider=%s)",
+                    url[:320], lang, tts_provider)
 
         if not url:
+            hub.latest_start_debug.update({"status": "rejected", "phase": "validation", "error": "Match URL or team name is required"})
             return web.json_response({"ok": False, "error": "Match URL or team name is required"}, status=400)
 
         if tts_provider == "sarvam" and not tts_api_key:
+            hub.latest_start_debug.update({"status": "rejected", "phase": "validation", "error": "Sarvam API key is required"})
             return web.json_response({"ok": False, "error": "Sarvam API key is required to use the Sarvam voice engine"}, status=400)
 
-        logger.info("Received /api/start request (url=%s, lang=%s, tts_provider=%s)",
-                    url[:320], lang, tts_provider)
+        hub.latest_start_debug.update({"status": "calling_broadcast", "phase": "hub.start_broadcast"})
         res = await hub.start_broadcast(url=url, lang=lang, stream_key=stream_key,
                                          tts_provider=tts_provider, tts_api_key=tts_api_key, tts_speaker=tts_speaker)
         status_code = 200 if res.get("ok") else 400
         if res.get("ok"):
             logger.info("Broadcast start accepted (url=%s)", (res.get("resolved_url") or url)[:320])
         else:
+            hub.latest_start_debug.update({"status": "rejected", "phase": "hub.start_broadcast", "error": str(res.get("error", "unknown error"))[:500]})
             logger.error("Broadcast start rejected: %s", res.get("error", "unknown error"))
         return web.json_response(res, status=status_code)
     except Exception as e:
+        hub.latest_start_debug.update({
+            "status": "error",
+            "phase": "handle_api_start",
+            "error": str(e)[:500],
+        })
+        logger.exception("Unhandled exception in /api/start")
         return web.json_response({"ok": False, "error": str(e)}, status=500)
 
 async def handle_api_stop(request: web.Request) -> web.Response:
