@@ -657,11 +657,17 @@ class BroadcastHub:
                         if not next_delivery_task.done():
                             next_delivery_task.cancel()
                         await asyncio.gather(tts_task, next_delivery_task, return_exceptions=True)
-                        self.latest_tts_debug.update({
-                            "status": "dropped_stale",
-                            "over": ball_over,
-                            "note": "A newer delivery arrived; stale synthesis was cancelled.",
-                        })
+                        # Do not overwrite the newer ball's queue/debug state with
+                        # diagnostics from a cancelled stale synthesis.
+                        if (
+                            self.latest_tts_debug.get("over") == ball_over
+                            and self.latest_tts_debug.get("circle_value") == circle_token
+                        ):
+                            self.latest_tts_debug.update({
+                                "status": "dropped_stale",
+                                "over": ball_over,
+                                "note": "A newer delivery arrived; stale synthesis was cancelled.",
+                            })
                         continue
 
                     if tts_task not in done:
@@ -688,11 +694,15 @@ class BroadcastHub:
                         logger.warning("TTS returned empty audio for ball %s", ball_over)
                         continue
                     if current_event["version"] != latest_event_version:
-                        self.latest_tts_debug.update({
-                            "status": "dropped_stale",
-                            "over": ball_over,
-                            "note": "A newer delivery arrived during synthesis; stale audio was discarded.",
-                        })
+                        if (
+                            self.latest_tts_debug.get("over") == ball_over
+                            and self.latest_tts_debug.get("circle_value") == circle_token
+                        ):
+                            self.latest_tts_debug.update({
+                                "status": "dropped_stale",
+                                "over": ball_over,
+                                "note": "A newer delivery arrived during synthesis; stale audio was discarded.",
+                            })
                         logger.info("TTS completed for old ball %s; discarding audio before broadcast", ball_over)
                         continue
 
@@ -1092,7 +1102,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-9",
+        "server_build": "circle-radio-20261021-10",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
