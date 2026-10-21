@@ -113,8 +113,10 @@ def _extract_crex_state_balls(html_text):
             if isinstance(value, list):
                 # Feed entries have the distinctive source fields o/b/c2.
                 if any(isinstance(item, dict) and
-                       ("c2" in item or "commentary" in item or "description" in item) and
-                       ("o" in item or "over" in item) for item in value):
+                       ("o" in item or "over" in item) and
+                       ("b" in item or "runs" in item or "ball" in item or
+                        "c2" in item or "commentary" in item or "description" in item)
+                       for item in value):
                     yield value
                 for child in value:
                     yield from item_lists(child)
