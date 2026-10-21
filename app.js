@@ -121,6 +121,7 @@
     ws.onopen = () => {
       wsBadge.className = "badge-conn connected";
       wsText.textContent = "LIVE CONNECTED";
+      syncLatestStatus(true);
     };
 
     ws.onclose = () => {
@@ -199,6 +200,7 @@
     // Re-evaluate the on-air badge for the new running state (shows the
     // "waiting for next ball" loader as soon as a broadcast starts).
     setTalkingState(false);
+    syncScreenWakeLock();
   }
 
   function updateScoreboard(data) {
@@ -264,8 +266,68 @@
   }
 
 
-  const SILENT_AUDIO = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+  const SILENT_AUDIO = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
   let isAudioUnlocked = false;
+
+  // A running stream is server-owned; browser visibility must never stop it.
+  // Keep the visible screen awake where supported and re-sync cached live score
+  // when a background tab becomes active again.
+  let screenWakeLock = null;
+  let statusSyncInFlight = false;
+  let lastStatusSyncAt = 0;
+
+  async function syncScreenWakeLock() {
+    const shouldHold = isRunning && document.visibilityState === "visible";
+    if (!shouldHold) {
+      if (screenWakeLock) {
+        try { await screenWakeLock.release(); } catch (_) {}
+        screenWakeLock = null;
+      }
+      return;
+    }
+    if (!("wakeLock" in navigator) || screenWakeLock) return;
+    try {
+      screenWakeLock = await navigator.wakeLock.request("screen");
+      screenWakeLock.addEventListener("release", () => {
+        screenWakeLock = null;
+      }, { once: true });
+    } catch (e) {
+      // Wake Lock may be denied by the browser or OS; background server polling
+      // continues independently as long as the broadcast is running.
+      console.debug("[Preet Sports] Screen wake lock unavailable:", e?.message || e);
+    }
+  }
+
+  async function syncLatestStatus(force = false) {
+    if (statusSyncInFlight) return;
+    const now = Date.now();
+    // Hidden-page timers are often throttled. When allowed to run, keep a
+    // modest heartbeat while broadcasting; on foreground, always force a sync.
+    if (!force && document.visibilityState !== "visible" && now - lastStatusSyncAt < 15000) return;
+    if (!force && !isRunning) return;
+    statusSyncInFlight = true;
+    lastStatusSyncAt = now;
+    try {
+      const resp = await fetch("/api/status?sync=" + now, {
+        cache: "no-store",
+        headers: { "Cache-Control": "no-cache" }
+      });
+      if (!resp.ok) return;
+      const data = await resp.json();
+      if (data.match_state && Object.keys(data.match_state).length) {
+        updateScoreboard(data.match_state);
+      }
+      // Avoid resetting the current on-air animation/audio status on every poll.
+      if (!!data.is_running !== isRunning) {
+        updateEngineStatus(data);
+      }
+      await syncScreenWakeLock();
+    } catch (e) {
+      console.debug("[Preet Sports] Status resync deferred:", e?.message || e);
+    } finally {
+      statusSyncInFlight = false;
+    }
+  }
 
   function unlockAudio() {
     if (isAudioUnlocked) return;
@@ -589,6 +651,24 @@
       console.log("Could not load initial data:", e);
     }
   }
+
+  // Re-sync score from the server's live cache every 2 seconds while the
+  // broadcast runs. This doesn't scrape CREX from the browser and survives
+  // missed/stalled WebSocket updates by replacing them with the latest snapshot.
+  setInterval(() => {
+    if (isRunning) syncLatestStatus(false);
+  }, 2000);
+
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible") {
+      syncLatestStatus(true);
+      if (!ws || ws.readyState === WebSocket.CLOSED) connectWebSocket();
+      syncScreenWakeLock();
+    } else {
+      syncScreenWakeLock();
+    }
+  });
+  window.addEventListener("focus", () => syncLatestStatus(true));
 
   // Run
   connectWebSocket();
