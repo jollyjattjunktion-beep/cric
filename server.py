@@ -933,7 +933,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-2",
+        "server_build": "circle-radio-20261021-3",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
