@@ -289,6 +289,8 @@ class BroadcastHub:
         self.youtube_task: Optional[asyncio.Task] = None
         self.latest_match_state: Dict[str, Any] = {}
         self.latest_commentary = ""
+        self.latest_feed_debug: Dict[str, Any] = {"status": "not_started"}
+        self.latest_tts_debug: Dict[str, Any] = {"status": "not_started"}
 
     async def broadcast_ws(self, msg_type: str, data: Any):
         """Pushes real-time JSON payload to all connected browser clients."""
@@ -528,8 +530,17 @@ class BroadcastHub:
 
                     # The poll loop already published this source line to the visual feed.
 
+                    self.latest_tts_debug = {
+                        "status": "generating",
+                        "provider": tts_provider,
+                        "voice": getattr(tts, "voice", None) or getattr(tts, "speaker", None),
+                        "language": lang,
+                        "over": ball_over,
+                        "text_length": len(source_text),
+                    }
                     mp3_data = await tts.speak_mp3(source_text, rate=rate, pitch=pitch)
                     if not mp3_data:
+                        self.latest_tts_debug["status"] = "empty_audio"
                         logger.warning("TTS returned empty audio for ball %s", ball_over)
                         continue
                     if current_event["version"] != latest_event_version:
@@ -546,6 +557,11 @@ class BroadcastHub:
                         "duration": round(duration, 1),
                         "kind": "ball",
                     })
+                    self.latest_tts_debug.update({
+                        "status": "audio_broadcast",
+                        "audio_bytes": len(mp3_data),
+                        "over": ball_over,
+                    })
                     logger.info("On-air current ball %s: %s", ball_over, source_text)
 
                     # Wait for either the approximate clip duration or a new delivery. If a new
@@ -558,7 +574,12 @@ class BroadcastHub:
 
                 except asyncio.CancelledError:
                     raise
-                except Exception:
+                except Exception as exc:
+                    self.latest_tts_debug = {
+                        **self.latest_tts_debug,
+                        "status": "error",
+                        "error": str(exc)[:240],
+                    }
                     logger.exception("Voice worker error")
                     event = None
 
@@ -609,6 +630,15 @@ class BroadcastHub:
                                     fresh_data.get("overs")
                                 )
 
+                        feed_debug = dict(getattr(parser, "_feed_debug", {}) or {})
+                        feed_debug["parser_delivery_count"] = len(raw_balls)
+                        feed_debug["score"] = {
+                            "team": fresh_data.get("batting_team"),
+                            "runs": fresh_data.get("total_runs"),
+                            "wickets": fresh_data.get("total_wickets"),
+                            "overs": fresh_data.get("overs"),
+                        }
+                        self.latest_feed_debug = feed_debug
                         self.latest_match_state = fresh_data
                         await self.broadcast_ws("match_state", fresh_data)
 
@@ -763,7 +793,9 @@ async def handle_api_status(request: web.Request) -> web.Response:
     return web.json_response({
         "is_running": hub.is_running,
         "match_state": hub.latest_match_state,
-        "latest_commentary": hub.latest_commentary
+        "latest_commentary": hub.latest_commentary,
+        "feed_debug": hub.latest_feed_debug,
+        "tts_debug": hub.latest_tts_debug,
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
