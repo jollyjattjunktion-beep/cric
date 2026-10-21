@@ -868,7 +868,7 @@ class BroadcastHub:
                             await self.broadcast_ws("error", {"message": f"Connection issue with match feed: {exc}"})
                             consecutive_errors = 0
 
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(0.75)
 
         except asyncio.CancelledError:
             logger.info("Broadcast pipeline cancelled by user")
@@ -933,7 +933,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "radio-fast-20261021-1",
+        "server_build": "circle-radio-20261021-2",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
