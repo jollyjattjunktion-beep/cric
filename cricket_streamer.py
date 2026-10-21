@@ -159,6 +159,8 @@ class CrexParser:
     def __init__(self, url: str, lang: str = "en"):
         self.url = url.strip()
         self.lang = lang
+        self._feed_retry_after = 0.0
+        self._feed_cache: List[Dict[str, Any]] = []
 
     async def fetch_html_async(self, session: Optional[aiohttp.ClientSession] = None) -> str:
         headers = {
@@ -201,16 +203,23 @@ class CrexParser:
         Tries the current v2 endpoint first (no static auth token), then the legacy v1
         request if needed. Only actual source commentary is returned; never invent text.
         """
+        now = time.monotonic()
+        if now < self._feed_retry_after:
+            return list(self._feed_cache)
+        self._feed_retry_after = now + 3.0
+
         match_match = re.search(r"-match-updates-([^/?#]+)", self.url, flags=re.IGNORECASE)
         if match_match:
-            match_key = match_match.group(1).strip()
+            # CREX frontend calls matchKey.toUpperCase(); match keys are case-sensitive.
+            match_key = match_match.group(1).strip().upper()
         else:
             # Some valid CREX routes are supplied without the "-match-updates-" portion.
             path = self.url.split("?", 1)[0].rstrip("/")
-            match_key = path.rsplit("-", 1)[-1].strip()
+            match_key = path.rsplit("-", 1)[-1].strip().upper()
         if not match_key:
             logger.warning("Unable to derive CREX match key from URL: %s", self.url)
-            return []
+            self._feed_cache = []
+        return []
 
         common_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
@@ -341,6 +350,8 @@ class CrexParser:
                         "CREX commentary %s endpoint returned %d deliveries for key %s; latest=%s",
                         version, len(balls), match_key, balls[-1].get("over")
                     )
+                    self._feed_cache = list(balls)
+                    self._feed_retry_after = time.monotonic() + 1.0
                     return balls
 
                 logger.warning(
