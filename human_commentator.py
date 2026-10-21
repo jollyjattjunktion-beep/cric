@@ -5,6 +5,7 @@ source paragraph. Source commentary remains available to the visual feed.
 """
 from __future__ import annotations
 
+import random
 import re
 from typing import Any, Dict, Optional
 
