@@ -35,7 +35,7 @@ import tempfile
 import subprocess
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import edge_tts
@@ -605,29 +605,32 @@ def build_over_summary(
     stats: Optional[dict] = None,
     match_overs: Optional[int] = None,
 ) -> str:
-    over_word = over_ordinal_hindi(over_int)
+    """Short Hinglish over recap with a naturally spoken current score."""
     parts: list[str] = []
 
     if stats and stats.get("legal", 0) >= 6:
-        if stats["runs"] == 0 and stats["wickets"] == 0:
-            parts.append(f"ओवर समाप्त! {over_word} ओवर मेडन! एक भी रन नहीं आया, कमाल की गेंदबाज़ी!")
-        elif stats["runs"] == 0:
-            wk = _count_phrase(stats["wickets"], "एक विकेट", "विकेट")
-            parts.append(f"ओवर समाप्त! विकेट मेडन! {over_word} ओवर में एक भी रन नहीं और {wk}! शानदार ओवर!")
+        over_runs = int(stats.get("runs", 0))
+        over_wickets = int(stats.get("wickets", 0))
+        fours = int(stats.get("fours", 0))
+        sixes = int(stats.get("sixes", 0))
+        if over_runs == 0 and over_wickets == 0:
+            parts.append(f"Over {over_int} complete—maiden over! Is over mein koi run nahi. Great bowling!")
+        elif over_runs == 0:
+            parts.append(f"Over {over_int} complete—wicket maiden! Koi run nahi, {over_wickets} wicket. Superb bowling!")
         else:
-            detail = []
-            if stats["sixes"]:
-                detail.append(_count_phrase(stats["sixes"], "एक छक्का", "छक्के"))
-            if stats["fours"]:
-                detail.append(_count_phrase(stats["fours"], "एक चौका", "चौके"))
-            if stats["wickets"]:
-                detail.append(_count_phrase(stats["wickets"], "एक विकेट", "विकेट"))
-            line = f"ओवर समाप्त! {over_word} ओवर में आए {number_to_hindi_words(stats['runs'])} रन"
-            if detail:
-                line += ", जिसमें " + _join_hindi(detail)
-            parts.append(line + "।")
+            details = []
+            if fours:
+                details.append(f"{fours} fours")
+            if sixes:
+                details.append(f"{sixes} sixes")
+            if over_wickets:
+                details.append(f"{over_wickets} wickets")
+            line = f"Over {over_int} complete! Is over mein {over_runs} runs aaye"
+            if details:
+                line += ", " + ", ".join(details)
+            parts.append(line + ".")
     else:
-        parts.append(f"ओवर समाप्त! {over_word} ओवर का खेल पूरा हुआ।")
+        parts.append(f"Over {over_int} complete.")
 
     try:
         runs_num = int(str(runs).strip())
@@ -635,27 +638,20 @@ def build_over_summary(
     except (TypeError, ValueError):
         return " ".join(parts)
 
-    runs_hi = number_to_hindi_words(runs_num)
-    if wkts_num == 0:
-        parts.append(f"स्कोर {runs_hi} रन, बिना किसी विकेट के नुकसान के।")
-    else:
-        parts.append(f"स्कोर {runs_hi} रन, {number_to_hindi_words(wkts_num)} विकेट के नुकसान पर।")
-
+    parts.append(f"Score {runs_num} for {wkts_num}.")
     crr = round(runs_num / max(over_int, 1), 2)
-    crr_hi = number_to_hindi_words(int(crr))
     high, mid = _rr_thresholds(match_overs)
     if crr >= high:
-        parts.append(f"करंट रन रेट {crr_hi} के पार पहुंच चुका है, बल्लेबाज़ पूरी तरह हावी हैं।")
+        parts.append(f"Run rate {crr:.2f} per over hai—batting side achchi position mein hai.")
     elif crr >= mid:
-        parts.append(f"रन गति लगभग {crr_hi} प्रति ओवर की है, दोनों टीमें अपनी रणनीति पर कायम हैं।")
+        parts.append(f"Run rate {crr:.2f} per over hai, scoring steady chal rahi hai.")
     else:
-        parts.append(f"रन गति {crr_hi} के आसपास थोड़ी धीमी है, अब बड़े शॉट्स की तलाश होगी।")
+        parts.append(f"Run rate {crr:.2f} per over hai—ab runs accelerate karne honge.")
 
     if match_overs and over_int < match_overs:
-        parts.append(f"पारी में अभी {number_to_hindi_words(match_overs - over_int)} ओवर बाकी हैं।")
+        parts.append(f"{match_overs - over_int} overs abhi baaki hain.")
 
     return " ".join(parts)
-
 
 def build_innings_end(runs, wkts) -> str:
     try:
@@ -863,6 +859,8 @@ class MatchState:
     last_wkts: Optional[int] = None
     innings_break_seen: bool = False
     match_overs: Optional[int] = None
+    # One over can be announced only once even if CREX repeats its last-circle snapshot.
+    announced_overs: set[int] = field(default_factory=set)
 
 
 EXTRACT_JS = r'''() => {
@@ -1075,12 +1073,18 @@ def is_backwards(prev: Optional[str], cur: Optional[str]) -> bool:
 async def announce_over_end(
     page: Page, announcer: RadioAnnouncer, snap: BallSnapshot, state: MatchState
 ) -> None:
+    over_int = int(snap.ball.split(".")[0]) + 1
+    if over_int in state.announced_overs:
+        log.info("Suppressing duplicate over recap for over %s", over_int)
+        return
+    # Claim it before the wait so repeated page snapshots cannot enqueue it again.
+    state.announced_overs.add(over_int)
+
     await asyncio.sleep(OVER_SETTLE_SECONDS)
     fresh = await extract_circle_balls_data(page)
     runs = fresh.runs if fresh and fresh.runs is not None else snap.runs
     wkts = fresh.wkts if fresh and fresh.wkts is not None else snap.wkts
 
-    over_int = int(snap.ball.split(".")[0]) + 1
     stats = over_stats_from_tokens(snap.over_balls)
     print(f"\n📊 Over {over_int} done | score {runs}/{wkts} | over stats {stats}")
     msg = build_over_summary(over_int, runs, wkts, stats, state.match_overs)
