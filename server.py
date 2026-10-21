@@ -901,7 +901,7 @@ class BroadcastHub:
 
                         # Latest HTML, embedded state and background API circle values are
                         # merged by delivery slot, with the most recent source refreshing it.
-                        raw_balls = _merge_ball_sources(dom_balls, state_balls, api_feed_cache)
+                        raw_balls = _merge_ball_sources(api_feed_cache, state_balls, dom_balls)
                         if raw_balls:
                             fresh_data["balls"] = raw_balls
                             fresh_data["paragraphs"] = [
@@ -917,6 +917,8 @@ class BroadcastHub:
                         feed_debug = dict(getattr(parser, "_feed_debug", {}) or {})
                         feed_debug["parser_delivery_count"] = len(raw_balls)
                         feed_debug["api_cache_delivery_count"] = len(api_feed_cache)
+                        feed_debug["dom_delivery_count"] = len(dom_balls)
+                        feed_debug["embedded_state_delivery_count"] = len(state_balls)
                         feed_debug["api_refresh_in_flight"] = bool(api_feed_task and not api_feed_task.done())
                         if raw_balls:
                             newest_circle = _latest_source_ball(raw_balls) or {}
@@ -1159,7 +1161,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-13",
+        "server_build": "circle-radio-20261021-14",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
