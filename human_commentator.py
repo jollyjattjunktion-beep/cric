@@ -129,11 +129,11 @@ class HumanCommentator:
                 return wicket_lines[kind]
             if hinglish:
                 wicket_lines = {
-                    "caught": f"Caught! {batter} ki innings khatam—{bowler} gets the breakthrough!",
-                    "bowled": f"Bowled! {bowler} ne stumps bikhair diye—{batter} is out!",
-                    "lbw": f"Big appeal, finger goes up—LBW! {batter} has to go!",
-                    "runout": f"Run out! Quick fielding, sharp throw—{batter} ki innings over!",
-                    "stumped": f"Stumped! Keeper ne chance nahi chhoda—{batter} is gone!",
+                    "caught": f"Caught! {batter} की पारी खत्म—{bowler} को बड़ा breakthrough मिला!",
+                    "bowled": f"Bowled! {bowler} ने stumps बिखेर दिए—{batter} आउट!",
+                    "lbw": f"Big appeal, finger goes up—LBW! {batter} आउट!",
+                    "runout": f"Run out! तेज़ fielding, sharp throw—{batter} की पारी खत्म!",
+                    "stumped": f"Stumped! Keeper ने chance नहीं छोड़ा—{batter} आउट!",
                     "wicket": f"WICKET! {batter} out—{bowler} gets a big breakthrough!",
                 }
                 return wicket_lines[kind]
@@ -156,9 +156,9 @@ class HumanCommentator:
                 ))
             if hinglish:
                 return random.choice((
-                    f"Utha kar maara! Ball hawa mein aur seedha stands ke paar—SIX!",
-                    f"Kya power hitting! {batter} ne {bowler} ko stands ke paar bhej diya—SIX!",
-                    f"Sweet spot se nikla shot, fielder bas dekhte reh gaye—maximum!",
+                    f"उठाकर मारा! Ball हवा में और सीधे stands के पार—SIX!",
+                    f"क्या power hitting! {batter} ने {bowler} की ball stands के पार भेज दी—SIX!",
+                    f"Sweet spot से निकला shot, fielder देखते रह गए—maximum!",
                 ))
             return f"What a hit! {batter} launches {bowler}'s delivery over the rope for SIX!"
 
@@ -171,9 +171,9 @@ class HumanCommentator:
                 ))
             if hinglish:
                 return random.choice((
-                    f"Kya timing! {batter} ne gap nikala aur ball rope ke paar—FOUR!",
-                    f"Sweet placement! Ball ground ke saath boundary tak—FOUR runs!",
-                    f"Gap mil gaya, fielder late pade—{batter} ke chaar runs!",
+                    f"क्या timing! {batter} ने gap निकाला और ball boundary के पार—FOUR!",
+                    f"Sweet placement! Ball ground के साथ boundary तक—FOUR runs!",
+                    f"Gap मिल गया, fielder late पड़े—{batter} के चार runs!",
                 ))
             return f"Timed beautifully! {batter} finds the gap for FOUR!"
 
@@ -181,28 +181,28 @@ class HumanCommentator:
             if hindi:
                 return "लाइन से भटकी गेंद, अंपायर का इशारा—वाइड! बल्लेबाज़ी टीम को एक्स्ट्रा मिला।"
             if hinglish:
-                return "Line se bhatki ball—wide! Batting side ko extra mila."
+                return "Line से भटकी ball—wide! Batting side को extra मिला."
             return "Wide! Too far outside the line; the batting side gets an extra."
 
         if event == "noball":
             if hindi:
                 return "नो-बॉल! गेंदबाज़ से गलती, बल्लेबाज़ी टीम को अतिरिक्त रन और अगली गेंद पर फ्री हिट।"
             if hinglish:
-                return "No-ball! Bowler se mistake, batting side ko extra—next ball free hit."
+                return "No-ball! Bowler से mistake, batting side को extra—next ball free hit."
             return "No-ball! A costly mistake from the bowler; an extra goes to the batting side."
 
         if event == "legbye":
             if hindi:
                 return f"गेंद पैड से लगकर निकली, लेग बाय के {number_to_hindi(n)} रन।"
             if hinglish:
-                return f"Ball pads se lagi—leg-bye ke {n} run, score mein jud gaye."
+                return f"Ball pads से लगी—leg-bye के {n} runs, score में जुड़ गए."
             return f"{n} leg-byes added to the score."
 
         if event == "bye":
             if hindi:
                 return f"विकेटकीपर से गेंद निकली—बाय के {number_to_hindi(n)} रन!"
             if hinglish:
-                return f"Keeper se ball nikli—bye ke {n} runs!"
+                return f"Keeper से ball निकली—bye के {n} runs!"
             return f"{n} byes! The score moves on without bat on ball."
 
         if event == "dot":
@@ -214,9 +214,9 @@ class HumanCommentator:
                 ))
             if hinglish:
                 return random.choice((
-                    f"Tight line aur length! {batter} ne defend kiya—dot ball, koi run nahi.",
-                    f"Good delivery from {bowler}; {batter} ko run ka chance nahi mila.",
-                    "Seedha fielder ke paas—no run, dot ball.",
+                    f"Tight line और length! {batter} ने defend किया—dot ball, कोई run नहीं.",
+                    f"{bowler} की अच्छी delivery—{batter} को run का chance नहीं मिला.",
+                    "सीधे fielder के पास—no run, dot ball.",
                 ))
             return f"Good line and length from {bowler}; no run, dot ball."
 
@@ -230,9 +230,9 @@ class HumanCommentator:
                     ))
                 if hinglish:
                     return random.choice((
-                        "Gap mein push kiya—quick single, strike rotate ho gayi.",
-                        "Soft hands, fast running—ek run complete!",
-                        f"{batter} ne gap nikala aur single le liya.",
+                        "Gap में push किया—quick single, strike rotate हो गई.",
+                        "Soft hands, fast running—एक run complete!",
+                        f"{batter} ने gap निकाला और single ले लिया.",
                     ))
                 return "Quick single; the strike rotates."
             if n == 2:
@@ -243,21 +243,21 @@ class HumanCommentator:
                     ))
                 if hinglish:
                     return random.choice((
-                        "Gap mein shot, dono batters ki tez running—two runs complete!",
-                        "Soft hands, sharp running—do runs mil gaye!",
+                        "Gap में shot, दोनों batters की तेज़ running—two runs complete!",
+                        "Soft hands, sharp running—दो runs मिल गए!",
                     ))
                 return "Two runs! Good running between the wickets."
             if n == 3:
                 if hindi:
                     return "शानदार रनिंग बिटवीन द विकेट्स, दोनों बल्लेबाज़ों ने तीन रन पूरे किए!"
                 if hinglish:
-                    return "Excellent running between the wickets—three runs complete!"
+                    return "Excellent running between the wickets—तीन runs complete!"
                 return "Three runs! Excellent running between the wickets."
             if n == 5:
                 if hindi:
                     return "पाँच रन! ओवरथ्रो या बेहतरीन दौड़, बल्लेबाज़ों ने पाँच रन बटोर लिए!"
                 if hinglish:
-                    return "Five runs! Smart running or an overthrow—score moves quickly."
+                    return "Five runs! Smart running या overthrow—score तेज़ी से आगे!"
                 return "Five runs! Smart running and pressure on the fielding side."
 
         # Safe fallback when the delivery circle is neither numeric nor a known extra.
