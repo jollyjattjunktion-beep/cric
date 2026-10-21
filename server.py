@@ -455,7 +455,7 @@ def _delivery_stats(token: Any) -> tuple[int, bool, int, int, int]:
     return (0, True, 0, 0, 0)
 
 
-def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str) -> Optional[str]:
+def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str, score_state: Optional[Dict[str, Any]] = None) -> Optional[str]:
     """Create a deterministic completed-over recap from CREX's source delivery badges."""
     rows = [b for b in balls if _ball_over_index(b) == over_index]
     # Dedupe repeated DOM wrappers before computing stats.
@@ -477,13 +477,41 @@ def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str) 
 
     spoken_over = over_index + 1
     if lang in ("hinglish", "hi"):
-        return (f"Over {spoken_over} complete! Is over mein {runs} runs aaye, "
-                f"{fours} fours, {sixes} sixes aur {wickets} wickets.")
-    four_word = "four" if fours == 1 else "fours"
-    six_word = "six" if sixes == 1 else "sixes"
-    wicket_word = "wicket" if wickets == 1 else "wickets"
-    return (f"Over {spoken_over} complete. {runs} runs, {fours} {four_word}, "
-            f"{sixes} {six_word} and {wickets} {wicket_word}.")
+        line = (
+            f"Over {spoken_over} complete! Is over mein {runs} runs aaye, "
+            f"{fours} fours, {sixes} sixes aur {wickets} wickets."
+        )
+    else:
+        four_word = "four" if fours == 1 else "fours"
+        six_word = "six" if sixes == 1 else "sixes"
+        wicket_word = "wicket" if wickets == 1 else "wickets"
+        line = (
+            f"Over {spoken_over} complete. {runs} runs, {fours} {four_word}, "
+            f"{sixes} {six_word} and {wickets} {wicket_word}."
+        )
+
+    # Add a concise current-score suffix to over summaries in spoken Hinglish.
+    if score_state:
+        try:
+            team_score = f"{int(score_state.get('total_runs'))} for {int(score_state.get('total_wickets'))}"
+        except (TypeError, ValueError):
+            team_score = ""
+        batters = []
+        for prefix in ("striker", "non_striker"):
+            name = _normal_space(score_state.get(prefix))
+            runs_value = score_state.get(f"{prefix}_runs")
+            balls_value = score_state.get(f"{prefix}_balls")
+            if not name or runs_value is None or balls_value is None or name.lower().startswith("batter "):
+                continue
+            try:
+                batters.append(f"{name} {int(runs_value)} off {int(balls_value)}")
+            except (TypeError, ValueError):
+                continue
+        if team_score:
+            line += f" Score {team_score}."
+        if batters:
+            line += " " + ", ".join(batters) + "."
+    return line
 
 
 def _source_badge(ball: Dict[str, Any]) -> str:
@@ -1307,7 +1335,7 @@ class BroadcastHub:
                                         and new_over > old_over and old_over in tracked_full_overs):
                                     over_id = f"{last_latest_state.get('batting_team', '')}:{old_over}"
                                     if over_id not in announced_over_ids and over_id not in pending_over_announcements:
-                                        summary_text = _over_announcement(old_over, raw_balls, lang)
+                                        summary_text = _over_announcement(old_over, raw_balls, lang, fresh_data)
                                         if summary_text:
                                             pending_over_announcements[over_id] = summary_text
                                             logger.info("Queued completed-over announcement for over %s", old_over + 1)
@@ -1481,7 +1509,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-15",
+        "server_build": "circle-radio-20261021-16",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
