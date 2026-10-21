@@ -161,6 +161,7 @@ class CrexParser:
         self.lang = lang
         self._feed_retry_after = 0.0
         self._feed_cache: List[Dict[str, Any]] = []
+        self._feed_debug: Dict[str, Any] = {"status": "not_started", "attempts": []}
 
     async def fetch_html_async(self, session: Optional[aiohttp.ClientSession] = None) -> str:
         headers = {
@@ -219,8 +220,10 @@ class CrexParser:
         if not match_key:
             logger.warning("Unable to derive CREX match key from URL: %s", self.url)
             self._feed_cache = []
+            self._feed_debug = {"status": "invalid_match_key", "attempts": []}
             return []
 
+        self._feed_debug = {"status": "requesting", "match_key": match_key, "attempts": []}
         common_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
             "Origin": "https://crex.com",
@@ -281,6 +284,14 @@ class CrexParser:
                             status_code = response.status
                             body_text = await response.text()
 
+                attempt_debug = {
+                    "version": version,
+                    "http_status": status_code,
+                    "body_length": len(body_text),
+                    "body_preview": body_text[:160] if status_code != 200 else "",
+                }
+                self._feed_debug.setdefault("attempts", []).append(attempt_debug)
+
                 if status_code != 200:
                     logger.warning(
                         "CREX commentary %s endpoint returned HTTP %s for match key %s; body=%s",
@@ -298,6 +309,9 @@ class CrexParser:
                     continue
 
                 source_items = extract_items(data)
+                attempt_debug["json_type"] = type(data).__name__
+                attempt_debug["recognized_items"] = len(source_items) if isinstance(source_items, list) else 0
+                attempt_debug["top_level_count"] = len(data) if isinstance(data, (list, dict)) else None
                 balls: List[Dict[str, Any]] = []
                 seen = set()
                 for item in source_items:
@@ -352,17 +366,29 @@ class CrexParser:
                     )
                     self._feed_cache = list(balls)
                     self._feed_retry_after = time.monotonic() + 1.0
+                    self._feed_debug["status"] = "ok"
+                    self._feed_debug["delivery_count"] = len(balls)
+                    self._feed_debug["latest_over"] = balls[-1].get("over")
                     return balls
 
+                self._feed_debug["status"] = "http_200_no_delivery_text"
+                self._feed_debug["last_version"] = version
+                self._feed_debug["last_json_type"] = type(data).__name__
+                self._feed_debug["last_top_level_count"] = len(data) if isinstance(data, (list, dict)) else None
                 logger.warning(
                     "CREX commentary %s endpoint returned HTTP 200 but no delivery text for key %s "
-                    "(response type=%s, top-level count=%s)",
+                    "(response type=%s, top-level count=%s, recognized=%s)",
                     version, match_key, type(data).__name__,
-                    len(data) if isinstance(data, (list, dict)) else "n/a"
+                    len(data) if isinstance(data, (list, dict)) else "n/a", len(source_items)
                 )
             except Exception as exc:
+                self._feed_debug.setdefault("attempts", []).append({"version": version, "error": str(exc)[:180]})
+                self._feed_debug["status"] = "request_error"
                 logger.warning("CREX commentary %s request failed for key %s: %s", version, match_key, exc)
 
+        if self._feed_debug.get("status") == "requesting":
+            self._feed_debug["status"] = "no_deliveries"
+        self._feed_cache = []
         return []
 
     def fetch_html(self) -> str:
