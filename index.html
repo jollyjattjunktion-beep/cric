@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>🏏 Cricket AI Live Broadcaster</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🏏</text></svg>">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <!-- Top Navigation Header -->
+  <header class="navbar">
+    <div class="nav-left">
+      <span class="logo-icon">🏏</span>
+      <div class="brand">
+        <h1>CRICKET AI BROADCASTER</h1>
+        <span class="tagline">Real-Time Commentary & Live Streaming Engine</span>
+      </div>
+    </div>
+    <div class="nav-right">
+      <div id="statusBadge" class="badge-status idle">
+        <span class="status-dot"></span>
+        <span id="statusText">IDLE</span>
+      </div>
+      <div id="wsBadge" class="badge-conn disconnected">
+        <span class="conn-dot"></span>
+        <span id="wsText">DISCONNECTED</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="main-container">
+    <!-- Live Match Banner & Controls -->
+    <section class="control-card glass-panel">
+      <div class="control-header">
+        <h2>Match Feed Configuration</h2>
+        <span class="control-sub">Select an active CREX live match or paste a direct match link</span>
+      </div>
+
+      <!-- System / Error Alert Banner -->
+      <div id="systemAlert" class="system-alert-banner hidden">
+        <span class="alert-icon">⚠️</span>
+        <span id="systemAlertText" class="alert-text"></span>
+        <button id="btnDismissAlert" type="button" class="alert-close-btn" title="Dismiss">✕</button>
+      </div>
+
+      <!-- Live Match Auto-Discovery Picker -->
+      <div class="preset-selector-row">
+        <div class="preset-label">
+          <span class="live-dot-mini"></span>
+          <span>Active Matches on CREX:</span>
+        </div>
+        <select id="presetMatchSelect" class="preset-select">
+          <option value="">⚡ Loading live matches...</option>
+        </select>
+        <button id="btnRefreshMatches" type="button" class="btn btn-ghost" title="Refresh match list">
+          🔄 Refresh
+        </button>
+      </div>
+
+      <div class="control-inputs">
+        <div class="input-group url-group">
+          <label for="matchUrl">Match Link or Teams (CREX, Cricbuzz, or Team Names)</label>
+          <input type="text" id="matchUrl" placeholder="Paste any match link or enter teams (e.g. AUS vs ZIM, IND vs AFG)" value="">
+          <div id="resolveBadge" class="resolve-badge hidden">
+            <span class="resolve-icon">🎯</span>
+            <span id="resolveBadgeText"></span>
+          </div>
+        </div>
+        <div class="input-group lang-group">
+          <label for="langSelect">Broadcast Language</label>
+          <select id="langSelect">
+            <option value="hinglish" selected>Hinglish AI (Dynamic Live Commentary)</option>
+            <option value="hi">हिन्दी (Hindi - Madhur Voice)</option>
+            <option value="en">English (Indian Accent - Prabhat Voice)</option>
+          </select>
+        </div>
+        <div class="input-group key-group">
+          <label for="streamKey">YouTube Stream Key (Optional)</label>
+          <input type="password" id="streamKey" placeholder="Paste YouTube Live RTMP Key">
+        </div>
+      </div>
+      <div class="control-inputs voice-inputs-row">
+        <div class="input-group">
+          <label for="voiceEngineSelect">Commentary Voice Engine</label>
+          <select id="voiceEngineSelect">
+            <option value="edge" selected>Edge Neural (Free, Default)</option>
+            <option value="sarvam">Sarvam AI (Male Voice)</option>
+          </select>
+        </div>
+        <div class="input-group gemini-key-group" id="geminiKeyGroup">
+          <label for="geminiApiKey">Gemini API Key (Hinglish AI)</label>
+          <input type="password" id="geminiApiKey" placeholder="Configured via .env (or paste here)">
+        </div>
+        <div class="input-group sarvam-key-group hidden" id="sarvamKeyGroup">
+          <label for="sarvamApiKey">Sarvam API Key</label>
+          <input type="password" id="sarvamApiKey" placeholder="Paste your Sarvam API subscription key">
+        </div>
+      </div>
+      <div class="control-actions">
+        <button id="btnStart" class="btn btn-primary">
+          <span class="btn-icon">▶</span> START LIVE BROADCAST
+        </button>
+        <button id="btnStop" class="btn btn-danger" disabled>
+          <span class="btn-icon">⏹</span> STOP BROADCAST
+        </button>
+        <div class="audio-control">
+          <button id="btnAudioToggle" class="btn btn-secondary">
+            <span id="audioIcon">🔊</span> <span id="audioText">Mute Audio</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Hero Section: Scoreboard + Live On-Air Studio -->
+    <div class="hero-grid">
+      <!-- Television Scorecard Overlay -->
+      <section class="scoreboard-card glass-panel">
+        <div class="sb-top">
+          <div class="live-pill">
+            <span class="live-blink"></span> LIVE
+          </div>
+          <div id="matchTitle" class="match-title">Ready to Broadcast Live</div>
+          <div id="matchVenue" class="match-venue">International Cricket Stadium</div>
+        </div>
+
+        <div class="sb-main">
+          <div class="score-box">
+            <div id="battingTeam" class="team-code">--</div>
+            <div id="teamScore" class="main-score">--/--</div>
+            <div id="oversCount" class="overs-text">OVERS: 0.0</div>
+            <div class="rate-pills">
+              <span id="crrBadge" class="rate-badge">CRR: 0.00</span>
+              <span id="oppScore" class="opp-score" style="display:none;"></span>
+            </div>
+          </div>
+          <div class="players-box">
+            <div class="player-row striker">
+              <span class="pointer">▶</span>
+              <div class="player-info-col">
+                <div class="player-main-line">
+                  <span id="strikerName" class="p-name">Striker</span>
+                  <span id="strikerFigures" class="p-fig">0 (0)</span>
+                </div>
+                <div id="strikerMeta" class="p-meta">4s: 0 • 6s: 0 • SR: 0.00</div>
+              </div>
+            </div>
+            <div class="player-row non-striker">
+              <span class="pointer">&nbsp;&nbsp;</span>
+              <div class="player-info-col">
+                <div class="player-main-line">
+                  <span id="nonStrikerName" class="p-name">Non-Striker</span>
+                  <span id="nonStrikerFigures" class="p-fig">0 (0)</span>
+                </div>
+                <div id="nonStrikerMeta" class="p-meta">4s: 0 • 6s: 0 • SR: 0.00</div>
+              </div>
+            </div>
+            <div class="bowler-row">
+              <span class="bowler-label">BOWLING:</span>
+              <div class="bowler-info-col">
+                <div class="bowler-main-line">
+                  <span id="bowlerName" class="b-name">Bowler</span>
+                  <span id="bowlerFigures" class="b-fig">0-0 (0.0 ov)</span>
+                </div>
+                <div id="bowlerEcon" class="b-meta">Econ: 0.00</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Partnership & This Over Bar -->
+        <div class="sb-meta-bar">
+          <div class="meta-item">
+            <span class="meta-label">P'SHIP:</span>
+            <span id="partnershipText" class="meta-val">--</span>
+          </div>
+          <div class="meta-item">
+            <span class="meta-label">LAST WKT:</span>
+            <span id="lastWktText" class="meta-val">--</span>
+          </div>
+          <div class="meta-item this-over-item">
+            <span class="meta-label">THIS OVER:</span>
+            <div id="thisOverContainer" class="this-over-bubbles"></div>
+          </div>
+        </div>
+
+        <div id="alertBanner" class="alert-banner hidden"></div>
+      </section>
+
+
+      <!-- Broadcaster Live Studio -->
+      <section class="studio-card glass-panel">
+        <div class="studio-header">
+          <div class="on-air-badge" id="onAirBadge">
+            <span class="spinner" id="badgeSpinner"></span>
+            <span class="mic-icon">🎙️</span>
+            <span id="onAirText">STUDIO READY</span>
+          </div>
+          <!-- Animated audio visualizer bars -->
+          <div class="waveform" id="waveform">
+            <div class="bar"></div>
+            <div class="bar"></div>
+            <div class="bar"></div>
+            <div class="bar"></div>
+            <div class="bar"></div>
+            <div class="bar"></div>
+          </div>
+        </div>
+
+        <div class="speaking-box">
+          <div class="speaking-label">CURRENT COMMENTARY (ON-AIR VOICE):</div>
+          <div id="speakingText" class="speaking-text">
+            "Start a broadcast to hear live ball-by-ball commentary here."
+          </div>
+        </div>
+
+        <!-- Audio Player -->
+        <div class="studio-player">
+          <audio id="liveAudio" preload="auto"></audio>
+          <div class="player-status">
+            <span class="status-indicator"></span>
+            <span id="playerStateText">Voice synthesizer online (auto-play enabled)</span>
+          </div>
+        </div>
+      </section>
+    </div>
+
+    <!-- Ball-by-Ball Live Timeline -->
+    <section class="feed-card glass-panel">
+      <div class="feed-header">
+        <h3>Ball-by-Ball Live Commentary</h3>
+        <span id="feedCount" class="badge-count">0 Balls</span>
+      </div>
+      <div id="feedList" class="feed-list">
+        <!-- Dynamically populated ball items -->
+        <div class="feed-empty">Waiting for match events to stream...</div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <span>Cricket AI Broadcast Engine • Powered by Neural TTS & Fast Scraper • Ready for Railway & YouTube Live</span>
+  </footer>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>
