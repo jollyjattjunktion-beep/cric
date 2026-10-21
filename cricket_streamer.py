@@ -459,7 +459,10 @@ class CrexParser:
 
         # 2. Multi-Strategy Dynamic Scorecard Extraction (No hardcoded score defaults)
         # Strategy A: Extract from page Title (e.g. "ZIM 66-2 (16.4) (Innocent Kaia 7(17)) ...")
-        m_title = re.search(r'\b([A-Za-z\-]{2,7})\s+(\d+)[-/](\d+)\s*\(([0-9\.]+)\)', title)
+        m_title = re.search(
+            r'^\s*([A-Za-z][A-Za-z0-9\s\-]{1,35}?)\s+(\d+)\s*[-/]\s*(\d+)\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*\)',
+            title
+        )
         if m_title:
             batting_team = m_title.group(1).strip()
             total_runs = int(m_title.group(2))
@@ -470,7 +473,10 @@ class CrexParser:
             score_card = soup.find("div", class_=lambda x: x and "live-score-card" in x)
             if score_card:
                 sc_text = score_card.get_text(" ", strip=True)
-                score_match = re.search(r'\b([A-Za-z\-]{2,7})\s*(\d+)[-/](\d+)\s*\(([0-9\.]+)\)', sc_text)
+                score_match = re.search(
+                    r'\b([A-Za-z][A-Za-z0-9\s\-]{1,35}?)\s+(\d+)\s*[-/]\s*(\d+)\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*\)',
+                    sc_text
+                )
                 if score_match:
                     batting_team = score_match.group(1).strip()
                     total_runs = int(score_match.group(2))
@@ -479,7 +485,10 @@ class CrexParser:
 
             # Strategy C: Extract pipe-delimited score from full_text
             if total_runs == 0 and total_wickets == 0:
-                m_pipe = re.search(r'\b([A-Za-z\-]{2,7})\s*\|\s*(\d+)[-/](\d+)\s*\|\s*\(([0-9\.]+)\)', full_text)
+                m_pipe = re.search(
+                    r'\b([A-Za-z][A-Za-z0-9\s\-]{1,35}?)\s*\|\s*(\d+)\s*[-/]\s*(\d+)\s*\|\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*\)',
+                    full_text
+                )
                 if m_pipe:
                     batting_team = m_pipe.group(1).strip()
                     total_runs = int(m_pipe.group(2))
@@ -488,18 +497,24 @@ class CrexParser:
 
             # Strategy D: Extract standard score from full_text
             if total_runs == 0 and total_wickets == 0:
-                m_std = re.search(r'\b([A-Za-z\-]{2,7})\s+(\d+)[-/](\d+)\s*\(([0-9\.]+)\)', full_text)
+                m_std = re.search(
+                    r'\b([A-Za-z][A-Za-z0-9\s\-]{1,35}?)\s+(\d+)\s*[-/]\s*(\d+)\s*\(\s*([0-9]+(?:\.[0-9]+)?)\s*\)',
+                    full_text
+                )
                 if m_std:
                     batting_team = m_std.group(1).strip()
                     total_runs = int(m_std.group(2))
                     total_wickets = int(m_std.group(3))
                     overs_str = m_std.group(4).strip()
 
-        # Update bowling team based on match url teams
+        # Update bowling team from the source title even when team names include spaces/digits
+        # (for example "BAN U19" versus the URL slug "ban-u19").
         if url_team1 and url_team2:
-            if batting_team.upper() == url_team1.upper():
+            compact_team = lambda value: re.sub(r"[^A-Z0-9]", "", str(value or "").upper())
+            batting_key = compact_team(batting_team)
+            if batting_key == compact_team(url_team1):
                 bowling_team = url_team2
-            elif batting_team.upper() == url_team2.upper():
+            elif batting_key == compact_team(url_team2):
                 bowling_team = url_team1
 
         # Current Run Rate (CRR) - computed early so available for all commentary strategies
