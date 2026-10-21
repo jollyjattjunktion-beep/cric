@@ -78,7 +78,7 @@ def _active_batter_score(info: Dict[str, Any], lang: str) -> str:
     if lang == "hinglish":
         return f"Score {score}: {batting_line}." if score else f"Batters: {batting_line}."
     if lang == "hi":
-        return f"स्कोर {score। {batting_line}।" if score else f"बल्लेबाज़: {batting_line}।"
+        return f"स्कोर {score}। बल्लेबाज़: {batting_line}।" if score else f"बल्लेबाज़: {batting_line}।"
     return f"Score {score}: {batting_line}." if score else f"Batters: {batting_line}."
 
 
