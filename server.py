@@ -491,6 +491,8 @@ class BroadcastHub:
         latest_event_version = 0
         pending_over_announcements: Dict[str, str] = {}
         announced_over_ids: set[str] = set()
+        # Only summarize overs whose first delivery was observed after this broadcast started.
+        tracked_full_overs: set[int] = set()
 
         async def queue_latest(event: Dict[str, Any]) -> None:
             if ball_queue.full():
@@ -589,13 +591,33 @@ class BroadcastHub:
                         "source_text_length": len(source_text),
                         "radio_text_length": len(radio_text),
                         "text_length": len(radio_text),
+                        "rate": rate,
+                        "pitch": pitch,
+                        "radio_text_preview": radio_text[:180],
                     }
-                    mp3_data = await tts.speak_mp3(radio_text, rate=rate, pitch=pitch)
+                    try:
+                        mp3_data = await asyncio.wait_for(
+                            tts.speak_mp3(radio_text, rate=rate, pitch=pitch),
+                            timeout=8.0,
+                        )
+                    except asyncio.TimeoutError:
+                        self.latest_tts_debug.update({
+                            "status": "timeout",
+                            "error": "TTS exceeded the 8-second low-latency limit",
+                            "over": ball_over,
+                        })
+                        logger.warning("TTS timed out for ball %s; waiting for the next delivery", ball_over)
+                        continue
                     if not mp3_data:
                         self.latest_tts_debug["status"] = "empty_audio"
                         logger.warning("TTS returned empty audio for ball %s", ball_over)
                         continue
                     if current_event["version"] != latest_event_version:
+                        self.latest_tts_debug.update({
+                            "status": "dropped_stale",
+                            "over": ball_over,
+                            "note": "A newer delivery arrived during synthesis; stale audio was discarded.",
+                        })
                         logger.info("TTS completed for old ball %s; discarding audio before broadcast", ball_over)
                         continue
 
@@ -735,6 +757,11 @@ class BroadcastHub:
                                     seen_feed_keys.add(candidate_key)
                                     new_feed.append(candidate)
                             for candidate in sorted(new_feed, key=lambda b: _ball_order(b)):
+                                candidate_over = _ball_over_index(candidate)
+                                delivery_match = re.search(r"\d+\.(\d+)", _normal_space(candidate.get("over")))
+                                if (candidate_over is not None and delivery_match
+                                        and int(delivery_match.group(1)) == 1):
+                                    tracked_full_overs.add(candidate_over)
                                 await self.broadcast_ws("feed_item", {
                                     "over": _normal_space(candidate.get("over")),
                                     "runs": _normal_space(candidate.get("runs")),
@@ -746,7 +773,8 @@ class BroadcastHub:
                             if latest_key != last_latest_key:
                                 old_over = _ball_over_index(last_latest_ball or {}) if last_latest_ball else None
                                 new_over = _ball_over_index(latest_ball)
-                                if old_over is not None and new_over is not None and new_over > old_over:
+                                if (old_over is not None and new_over is not None
+                                        and new_over > old_over and old_over in tracked_full_overs):
                                     over_id = f"{last_latest_state.get('batting_team', '')}:{old_over}"
                                     if over_id not in announced_over_ids and over_id not in pending_over_announcements:
                                         summary_text = _over_announcement(old_over, raw_balls, lang)
