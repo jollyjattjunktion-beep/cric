@@ -46,6 +46,70 @@ logging.basicConfig(
 )
 logger = logging.getLogger("CricketStreamer")
 
+def _walk_json_objects(value):
+    """Yield every nested dictionary in an embedded CREX payload."""
+    if isinstance(value, dict):
+        yield value
+        for child in value.values():
+            yield from _walk_json_objects(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _walk_json_objects(child)
+
+
+def _decode_script_json(script_text):
+    """Decode JSON from a script body, including assignment-wrapped app state."""
+    cleaned = html.unescape(
+        script_text.replace("&q;", '"').replace("&a;", "&").replace("&s;", "'")
+    ).strip()
+    try:
+        return json.loads(cleaned)
+    except Exception:
+        pass
+
+    decoder = json.JSONDecoder()
+    # A script can contain JavaScript before its initial-state JSON object.
+    # Try JSON roots until a ball-feed/metadata payload is found.
+    fallback = None
+    attempts = 0
+    for match in re.finditer(r"[\\[{]", cleaned):
+        attempts += 1
+        if attempts > 120:
+            break
+        try:
+            candidate, _ = decoder.raw_decode(cleaned[match.start():])
+        except Exception:
+            continue
+        if not isinstance(candidate, (dict, list)):
+            continue
+        if fallback is None:
+            fallback = candidate
+        sample = repr(candidate).lower()
+        if any(marker in sample for marker in (
+            "getballfeeds", "ballfeeds", "getmatchmetadata", "stats.crickapi.com"
+        )):
+            return candidate
+    return fallback
+
+
+def _iter_ball_feed_items(value):
+    """Find source ball objects regardless of whether CREX wraps them in data/result arrays."""
+    if isinstance(value, dict):
+        keys = {str(key).lower() for key in value}
+        has_over = any(key in keys for key in ("o", "over", "overno", "over_number"))
+        has_ball_text = any(key in keys for key in (
+            "c2", "c", "commentary", "description", "comment", "balltext"
+        ))
+        if has_over and has_ball_text:
+            yield value
+            return
+        for child in value.values():
+            yield from _iter_ball_feed_items(child)
+    elif isinstance(value, list):
+        for child in value:
+            yield from _iter_ball_feed_items(child)
+
+
 
 
 class FreeTranslator:
@@ -169,23 +233,45 @@ class CrexParser:
         title = soup.title.get_text() if soup.title else "Live Cricket Match"
         clean_title = title.split(",")[0].replace("🏆", "").strip()
 
-        # Parse JSON state if present
+        # Parse CREX application/API state from script payloads.
+        # Recent CREX pages may wrap API data in a script assignment or omit the old
+        # "stats.crickapi.com" marker, so inspect script bodies containing known feed markers.
         data_store = {}
-        for s in html_text.split("<script"):
-            if "stats.crickapi.com" in s:
-                try:
-                    body = s.split(">", 1)[1].split("</script>")[0].strip()
-                    clean_json = html.unescape(body.replace("&q;", '"').replace("&a;", "&").replace("&s;", "'"))
-                    data_store = json.loads(clean_json)
-                    break
-                except Exception:
-                    pass
+        script_payloads = []
+        for script_tag in soup.find_all("script"):
+            body = script_tag.string or script_tag.get_text("", strip=False)
+            if not body or len(body) > 5_000_000:
+                continue
+            lower_body = body.lower()
+            if not any(marker in lower_body for marker in (
+                "stats.crickapi.com", "getballfeeds", "ballfeeds", "getmatchmetadata"
+            )):
+                continue
+            parsed_payload = _decode_script_json(body)
+            if isinstance(parsed_payload, (dict, list)):
+                script_payloads.append(parsed_payload)
+
+        if script_payloads:
+            # Prefer the payload that actually includes a ball feed, then metadata.
+            data_store = max(
+                script_payloads,
+                key=lambda payload: (
+                    "getballfeeds" in repr(payload).lower()
+                    or "ballfeeds" in repr(payload).lower(),
+                    "getmatchmetadata" in repr(payload).lower(),
+                    len(repr(payload)),
+                ),
+            )
+        else:
+            logger.debug("No embedded CREX ball-feed JSON found in current HTML snapshot.")
 
         venue = "International Stadium"
-        for k, v in data_store.items():
-            if "getMatchMetaData" in k and isinstance(v, list) and len(v) > 0:
-                venue = v[0].get("v", venue)
-                break
+        for node in _walk_json_objects(data_store):
+            for k, v in node.items():
+                if "getMatchMetaData" in str(k) and isinstance(v, list) and len(v) > 0:
+                    first = v[0] if isinstance(v[0], dict) else {}
+                    venue = first.get("v", first.get("venue", venue))
+                    break
 
         full_text = soup.get_text(" | ", strip=True)
 
@@ -295,94 +381,116 @@ class CrexParser:
                 bowler_runs = int(bowler_matches[0][2])
                 bowler_overs = float(bowler_matches[0][3])
 
-        # 4. Extract structured ball-by-ball commentary using exact CREX classes
+        # 4. Extract source commentary from CREX DOM. Class names are still used,
+        # but the HTML tag type is no longer assumed to be <span>.
         balls_data = []
-        for over_span in soup.find_all("span", class_=lambda x: x and "cm-b-over" in x):
-            parent = over_span.find_parent("div", class_=lambda x: x and "cm-b-roundcard" in x) or over_span.find_parent("div")
-            c1_span = parent.find("span", class_=lambda x: x and "cm-b-comment-c1" in x) if parent else None
-            ball_span = parent.find("span", class_=lambda x: x and "cm-b-ballupdate" in x) if parent else None
-            c2_span = parent.find("span", class_=lambda x: x and "cm-b-comment-c2" in x) if parent else None
+        over_nodes = soup.find_all(
+            lambda tag: tag.name in ("span", "div", "p", "li")
+            and tag.get("class")
+            and any("cm-b-over" in str(cls) for cls in tag.get("class", []))
+        )
+
+        for over_span in over_nodes:
+            parent = over_span.find_parent(
+                lambda tag: tag.get("class")
+                and any("cm-b-roundcard" in str(cls) for cls in tag.get("class", []))
+            ) or over_span.find_parent(["div", "li", "article"])
+            if not parent:
+                continue
+
+            c1_span = parent.find(class_=lambda x: x and "cm-b-comment-c1" in x)
+            ball_span = parent.find(class_=lambda x: x and "cm-b-ballupdate" in x)
+            c2_span = parent.find(class_=lambda x: x and "cm-b-comment-c2" in x)
 
             over_str = over_span.get_text(strip=True)
-            matchup_str = c1_span.get_text(strip=True) if c1_span else ""
-            runs_str = ball_span.get_text(strip=True) if ball_span else "0"
+            matchup_str = c1_span.get_text(" ", strip=True) if c1_span else ""
+            runs_str = ball_span.get_text(" ", strip=True) if ball_span else "0"
             commentary_str = c2_span.get_text(" ", strip=True) if c2_span else ""
-            commentary_clean = re.sub(r'\s+', ' ', commentary_str).strip()
+            commentary_clean = re.sub(r"\s+", " ", commentary_str).strip()
 
-            if commentary_clean:
-                full_spoken_line = f"Over {over_str}: {matchup_str}. {commentary_clean}" if matchup_str else f"Over {over_str}. {commentary_clean}"
+            if commentary_clean and re.fullmatch(r"\d{1,2}\.\d{1,2}", over_str):
+                full_spoken_line = (
+                    f"Over {over_str}: {matchup_str}. {commentary_clean}"
+                    if matchup_str else f"Over {over_str}. {commentary_clean}"
+                )
                 balls_data.append({
                     "over": over_str,
                     "matchup": matchup_str,
                     "runs": runs_str,
                     "commentary": commentary_clean,
-                    "spoken_line": full_spoken_line
+                    "spoken_line": full_spoken_line,
                 })
 
-        # Strategy 4B: Extract from embedded getBallFeeds JSON if HTML classes are missing
+        # Strategy 4B: Read embedded getBallFeeds payloads recursively. CREX has returned
+        # lists directly and wrapped them in data/result/response objects across page versions.
         if not balls_data:
-            for k, v in data_store.items():
-                if "getBallFeeds" in k and isinstance(v, list):
-                    for item in v:
-                        # Case 1: Structured ball object with 'b' (runs/event), 'o' (over), 'c1' (matchup), 'c2' (description)
-                        if item.get("type") == "b" or ("b" in item and "o" in item):
-                            o_val = str(item.get("o", "Live")).strip()
-                            r_val = str(item.get("b", "0")).strip().upper()
-                            m_val = str(item.get("c1", "") or "").strip()
-                            c2_raw = str(item.get("c2", "") or "").strip()
-                            c2_decoded = c2_raw.replace("&l;", "<").replace("&g;", ">").replace("&q;", '"').replace("&a;", "&")
-                            c2_decoded = html.unescape(c2_decoded)
-                            c2_decoded = re.sub(r'<[^>]+>', ' ', c2_decoded)
-                            c2_clean = re.sub(r'\s+', ' ', c2_decoded).strip()
+            feed_payloads = []
+            for node in _walk_json_objects(data_store):
+                for key, value in node.items():
+                    if "getballfeeds" in str(key).lower() or "ballfeeds" in str(key).lower():
+                        feed_payloads.append(value)
 
-                            # Only ever speak the source's own text; skip balls with no real commentary.
-                            if not c2_clean:
-                                continue
-                            comm_val = c2_clean
+            feed_items = []
+            for payload in feed_payloads:
+                feed_items.extend(_iter_ball_feed_items(payload))
+            if not feed_items:
+                feed_items = list(_iter_ball_feed_items(data_store))
 
-                            spoken = f"Over {o_val}: {m_val}. {comm_val}" if m_val else f"Over {o_val}: {comm_val}"
-                            balls_data.append({
-                                "over": o_val,
-                                "matchup": m_val,
-                                "runs": r_val,
-                                "commentary": comm_val,
-                                "spoken_line": spoken
-                            })
-                            continue
+            seen_source_balls = set()
+            for item in feed_items:
+                lower_item = {str(k).lower(): v for k, v in item.items()}
+                o_val = str(lower_item.get("o", lower_item.get("over", lower_item.get("overno", "Live")))).strip()
+                r_val = str(lower_item.get("b", lower_item.get("runs", lower_item.get("ball", "0")))).strip().upper()
+                m_val = str(lower_item.get("c1", lower_item.get("matchup", lower_item.get("bowlerbatter", ""))) or "").strip()
+                c2_raw = str(lower_item.get("c2", lower_item.get("commentary", lower_item.get("description", lower_item.get("comment", "")))) or "").strip()
+                c2_decoded = c2_raw.replace("&l;", "<").replace("&g;", ">").replace("&q;", '"').replace("&a;", "&")
+                c2_decoded = html.unescape(c2_decoded)
+                c2_clean = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", c2_decoded)).strip()
 
-                        # Case 2: Legacy/Text ball format with 'c' string
-                        raw_c = str(item.get("c", "") or "")
-                        if not raw_c:
-                            continue
-                        clean_c = html.unescape(raw_c.replace("&l;", "<").replace("&g;", ">").replace("&q;", '"').replace("&a;", "&"))
-                        clean_c = re.sub(r'<[^>]+>', '', clean_c).strip()
-                        if len(clean_c) < 10:
-                            continue
+                # Legacy CREX payloads store their entire display line in key "c".
+                if not c2_clean:
+                    raw_c = str(lower_item.get("c", "") or "")
+                    raw_c = html.unescape(raw_c.replace("&l;", "<").replace("&g;", ">").replace("&q;", '"').replace("&a;", "&"))
+                    c2_clean = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw_c)).strip()
 
-                        # Check for over pattern in commentary
-                        m_over = re.search(r'(?:Over\s*|^\s*)(\d+\.\d+)\s*:?\s*([^:\n\r0-9]+?)(?:\s+(\d+|W|4|6|0))?\s*[:\-\.]?\s+(.+)', clean_c)
-                        if m_over:
-                            o_val = m_over.group(1)
-                            m_val = m_over.group(2).strip()
-                            r_val = m_over.group(3) or "0"
-                            comm_val = m_over.group(4).strip()
-                            balls_data.append({
-                                "over": o_val,
-                                "matchup": m_val,
-                                "runs": r_val,
-                                "commentary": comm_val,
-                                "spoken_line": f"Over {o_val}: {m_val}. {comm_val}"
-                            })
-                        else:
-                            on = item.get("on", -1)
-                            over_label = f"{on//6}.{on%6 + 1}" if isinstance(on, int) and on > 0 else "Live"
-                            balls_data.append({
-                                "over": over_label,
-                                "matchup": f"{bowler} to {striker}" if bowler and striker else "",
-                                "runs": "0",
-                                "commentary": clean_c,
-                                "spoken_line": clean_c
-                            })
+                if not c2_clean or len(c2_clean) < 4:
+                    continue
+
+                if o_val == "Live":
+                    on = lower_item.get("on", -1)
+                    if isinstance(on, int) and on >= 0:
+                        o_val = f"{on // 6}.{on % 6 + 1}"
+
+                identity = f"{o_val}|{r_val}|{m_val}|{c2_clean}"
+                if identity in seen_source_balls:
+                    continue
+                seen_source_balls.add(identity)
+
+                spoken = f"Over {o_val}: {m_val}. {c2_clean}" if m_val else (f"Over {o_val}: {c2_clean}" if o_val != "Live" else c2_clean)
+                balls_data.append({
+                    "over": o_val,
+                    "matchup": m_val,
+                    "runs": r_val,
+                    "commentary": c2_clean,
+                    "spoken_line": spoken,
+                })
+
+        # Stable chronological order. The web pipeline selects the latest actual delivery.
+        balls_data.sort(key=lambda b: (
+            int(re.match(r"\d+", str(b.get("over", ""))).group())
+            if re.match(r"\d+", str(b.get("over", ""))) else -1,
+            int(re.search(r"\.(\d+)", str(b.get("over", ""))).group(1))
+            if re.search(r"\.(\d+)", str(b.get("over", ""))) else 0,
+        ))
+
+        if not balls_data:
+            logger.info(
+                "CREX parsed scoreboard but no ball commentary in this HTML snapshot (URL=%s, payloads=%d, DOM over nodes=%d)",
+                self.url, len(script_payloads), len(over_nodes)
+            )
+        else:
+            logger.info("CREX extracted %d source ball commentary items; latest=%s",
+                        len(balls_data), balls_data[-1].get("over"))
 
         cards = soup.find_all("div", class_=lambda x: x and "cm-b-roundcard" in x)
         paragraphs = []
