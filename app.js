@@ -266,7 +266,7 @@
   }
 
 
-  const SILENT_AUDIO = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
+  const SILENT_AUDIO = "data:audio/wav;base64,UklGRigAAABXQVZFZm10IBIAAAABAAEARKwAAIhYAQACABAAAABkYXRhAgAAAAEA";
   let isAudioUnlocked = false;
 
   // A running stream is server-owned; browser visibility must never stop it.
@@ -308,7 +308,7 @@
     statusSyncInFlight = true;
     lastStatusSyncAt = now;
     try {
-      const resp = await fetch("/api/status?sync=" + now, {
+      const resp = await fetch("/api/status", {
         cache: "no-store",
         headers: { "Cache-Control": "no-cache" }
       });
