@@ -160,7 +160,6 @@ def _extract_crex_state_balls(html_text):
                         "over": over,
                         "matchup": matchup,
                         "circle_val": run_token,
-                        "circle_val": run_token,
                         "runs": run_token,
                         "commentary": commentary,
                         "spoken_line": spoken,
@@ -248,7 +247,7 @@ def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str) 
 
     runs = fours = sixes = wickets = legal = 0
     for ball in rows:
-        n, is_legal, f, s, w = _delivery_stats(ball.get("runs"))
+        n, is_legal, f, s, w = _delivery_stats(ball.get("circle_val", ball.get("runs")))
         runs += n
         legal += int(is_legal)
         fours += f
@@ -795,7 +794,7 @@ class BroadcastHub:
                                 seen_feed_keys.add(latest_key)
                                 await self.broadcast_ws("feed_item", {
                                     "over": _normal_space(latest_ball.get("over")),
-                                    "runs": _normal_space(latest_ball.get("runs")),
+                                    "runs": _normal_space(latest_ball.get("circle_val", latest_ball.get("runs"))),
                                     "matchup": _normal_space(latest_ball.get("matchup")),
                                     "badge": _source_badge(latest_ball),
                                     "commentary": _normal_space(latest_ball.get("commentary")),
@@ -827,7 +826,7 @@ class BroadcastHub:
                                     tracked_full_overs.add(candidate_over)
                                 await self.broadcast_ws("feed_item", {
                                     "over": _normal_space(candidate.get("over")),
-                                    "runs": _normal_space(candidate.get("runs")),
+                                    "runs": _normal_space(candidate.get("circle_val", candidate.get("runs"))),
                                     "matchup": _normal_space(candidate.get("matchup")),
                                     "badge": _source_badge(candidate),
                                     "commentary": _normal_space(candidate.get("commentary")),
@@ -945,7 +944,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-3",
+        "server_build": "circle-radio-20261021-4",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
