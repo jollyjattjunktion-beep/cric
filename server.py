@@ -721,13 +721,13 @@ class BroadcastHub:
         consecutive_errors = 0
 
         try:
-            logger.info("Starting CREX poll loop (1-second interval); speech backlog is disabled")
+            logger.info("Starting CREX poll loop (0.75-second interval); speech backlog is disabled")
             async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
                 while self.is_running:
                     try:
                         html_text = await parser.fetch_html_async(session=session)
                         if not html_text:
-                            await asyncio.sleep(1.0)
+                            await asyncio.sleep(0.75)
                             continue
 
                         fresh_data = parser.parse(html_text)
