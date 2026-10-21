@@ -66,7 +66,7 @@ class HumanCommentator:
         number = _number(token, 0)
 
         if token in {"w", "wkt", "out", "wicket"} or re.search(
-            r"\b(dismissed|caught behind|caught by|caught|run[\s-]?out|runout|stumped|lbw|bowled out|is out|given out)\b|कैच आउट|रन आउट|स्टंप(?:्ड|िंग)?|एलबीडब्ल्यू|आउट हो गए|आउट हो गया|बल्लेबाज़ आउट|बल्लेबाज आउट|विकेट गिरा|विकेट मिल गया|विकेट मिला|बोल्ड",
+            r"\b(dismissed|caught behind|caught by|run[\s-]?out|runout|stumped|lbw|bowled out|is out|given out)\b|कैच आउट|रन आउट|स्टंप(?:्ड|िंग)?|एलबीडब्ल्यू|आउट हो गए|आउट हो गया|बल्लेबाज़ आउट|बल्लेबाज आउट|विकेट गिरा|विकेट मिल गया|विकेट मिला|बोल्ड",
             source,
         ):
             return {"event": "wicket", "badge": "⚡ WICKET", "rate": "+30%", "pitch": "+20Hz", "emotion": "high_energy"}
