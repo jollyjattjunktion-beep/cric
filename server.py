@@ -68,7 +68,8 @@ def _parse_crex_state_json(raw):
 
 
 def _clean_crex_text(value):
-    text = html.unescape(str(value or ""))
+    # Numeric zero is a real dot-ball token; never collapse it to an empty string.
+    text = html.unescape("" if value is None else str(value))
     text = re.sub(r"<[^>]+>", " ", text)
     return re.sub(r"\s+", " ", text).strip()
 
@@ -759,6 +760,14 @@ class BroadcastHub:
                         "error": str(exc)[:240],
                     }
                     logger.exception("Voice worker error")
+                    try:
+                        await self.broadcast_ws("tts_error", {
+                            "message": str(exc)[:180],
+                            "over": self.latest_tts_debug.get("over"),
+                            "circle_value": self.latest_tts_debug.get("circle_value"),
+                        })
+                    except Exception:
+                        pass
                     event = None
 
         voice_task = asyncio.create_task(voice_worker(), name="current_ball_voice_worker")
@@ -833,6 +842,14 @@ class BroadcastHub:
 
                         feed_debug = dict(getattr(parser, "_feed_debug", {}) or {})
                         feed_debug["parser_delivery_count"] = len(raw_balls)
+                        feed_debug["api_cache_delivery_count"] = len(api_feed_cache)
+                        feed_debug["api_refresh_in_flight"] = bool(api_feed_task and not api_feed_task.done())
+                        if raw_balls:
+                            newest_circle = _latest_source_ball(raw_balls) or {}
+                            feed_debug["latest_ball_over"] = _normal_space(newest_circle.get("over"))
+                            feed_debug["latest_circle_value"] = _normal_space(
+                                newest_circle.get("circle_val", newest_circle.get("runs", ""))
+                            ).upper()
                         feed_debug["score"] = {
                             "team": fresh_data.get("batting_team"),
                             "runs": fresh_data.get("total_runs"),
@@ -1068,7 +1085,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-7",
+        "server_build": "circle-radio-20261021-8",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
