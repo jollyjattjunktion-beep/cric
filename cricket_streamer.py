@@ -245,7 +245,7 @@ class CrexParser:
             """Accept array responses or nested API wrappers."""
             if isinstance(data, list):
                 if any(isinstance(x, dict) and
-                       any(k in x for k in ("c2", "commentary", "description", "balltext"))
+                       any(k in x for k in ("c2", "c", "commentary", "description", "balltext", "text"))
                        for x in data):
                     return data
                 for child in data:
