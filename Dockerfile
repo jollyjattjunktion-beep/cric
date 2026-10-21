@@ -22,6 +22,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
+# Install headless Chromium so the web service reads the live rendered CREX circle strip.
+RUN python -m playwright install --with-deps chromium
+
 # Copy project files
 COPY . .
 
