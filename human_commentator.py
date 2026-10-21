@@ -69,8 +69,9 @@ def _active_batter_score(info: Dict[str, Any], lang: str) -> str:
 
     if not players:
         return ""
+    # Keep the score suffix short so Madhur can finish well before the next delivery.
     batting_line = ", ".join(
-        f"{name} {runs} off {balls} balls" for _, name, runs, balls in players
+        f"{name} {runs} off {balls}" for _, name, runs, balls in players
     )
     team_runs, team_wickets = info.get("total_runs"), info.get("total_wickets")
     try:
