@@ -113,7 +113,6 @@ class HumanCommentator:
         n = _number(token, 1)
         bowler = bowler or ("bowler" if hinglish else "गेंदबाज़")
         batter = batter or ("batter" if hinglish else "बल्लेबाज़")
-        over_prefix = f"Over {token and ''}" if False else ""
 
         # The text is intentionally handcrafted and concise; never read c2/source prose.
         if event == "wicket":
@@ -315,3 +314,4 @@ class HumanCommentator:
 
 
 commentator = HumanCommentator()
+
