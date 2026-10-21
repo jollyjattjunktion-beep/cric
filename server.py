@@ -21,6 +21,11 @@ load_dotenv()
 import aiohttp
 from aiohttp import web
 
+try:
+    from playwright.async_api import async_playwright
+except ImportError:  # REST/HTML feed remains a fallback if Chromium is unavailable.
+    async_playwright = None
+
 # Import existing core modules
 from cricket_streamer import CrexParser, create_tts, get_live_matches, resolve_match_url
 from human_commentator import commentator
@@ -34,6 +39,174 @@ logger = logging.getLogger("WebServer")
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR  # Flat project: index.html, app.js and style.css sit beside server.py.
+
+
+CREX_CIRCLE_EXTRACT_JS = r'''() => {
+    let ballNum = null;
+    let seq = null;
+    let circleVal = null;
+    let bowler = '';
+    let batsman = '';
+    let runs = null;
+    let wkts = null;
+    let isOverComplete = false;
+    let isInningsBreak = false;
+    let lastDismissal = null;
+    let activeBalls = [];
+
+    const bodyText = document.body ? document.body.innerText : '';
+    const title = document.title || '';
+    const EXTRA_RE = /(?:wd|wide|nb|no\s*ball)/i;
+    const BALL_TOKEN = /^(?:[0-6]|w|wkt|out|wd|wide|nb|no\s*ball|lb|b|•|\d+\s*(?:wd|nb|lb|b)|(?:wd|nb|lb|b)\s*\+?\s*\d+)$/i;
+
+    if (/\((?:10\.0\vert{}20\.0\vert{}50\.0)\)/.test(title) || /Innings Break/i.test(bodyText) || /-10\b/.test(title)) {
+        isInningsBreak = true;
+    }
+
+    let latestOverNum = null;
+    const overRows = document.querySelectorAll(
+        'div[class*="over-card"], div[class*="recent-over"], div[class*="overRow"], div[class*="overWrap"], div[class*="over"]'
+    );
+    for (const row of overRows) {
+        const rowText = row.innerText || '';
+        const m = rowText.match(/\bOver\s+(\d+)\b/i);
+        if (!m) continue;
+        const parsedOver = parseInt(m[1], 10);
+        const rowBalls = [];
+        const nodes = row.querySelectorAll('span, b, div[class*="ball"], div[class*="circle"]');
+        for (const node of nodes) {
+            if (node.children.length !== 0) continue;
+            const val = (node.innerText || '').trim();
+            if (BALL_TOKEN.test(val)) rowBalls.push(val);
+        }
+        if (rowBalls.length > 0 && rowBalls.length <= 12) {
+            latestOverNum = parsedOver - 1;
+            activeBalls = rowBalls;
+        }
+    }
+
+    if (latestOverNum !== null && activeBalls.length > 0) {
+        let legalDeliveries = 0;
+        for (const v of activeBalls) {
+            if (!EXTRA_RE.test(v)) legalDeliveries++;
+        }
+        const clamped = Math.min(Math.max(legalDeliveries, 1), 6);
+        ballNum = `${latestOverNum}.${clamped}`;
+        seq = `${latestOverNum}:${activeBalls.length}`;
+        circleVal = activeBalls[activeBalls.length - 1];
+        if (legalDeliveries === 6 && !EXTRA_RE.test(circleVal)) {
+            isOverComplete = true;
+        }
+    }
+
+    if (!ballNum) {
+        const titleOversMatch = title.match(/\((\d{1,2}\.([1-6]))\)/);
+        if (titleOversMatch) ballNum = titleOversMatch[1];
+    }
+
+    const toRe = /([A-Za-z'\-]+(?: [A-Za-z'\-]+){0,3})\s+to\s+([A-Za-z'\-]+(?: [A-Za-z'\-]+){0,3})(?:,|\n|$)/i;
+    const commItems = document.querySelectorAll(
+        'div[class*="item"], div[class*="update"], div[class*="comm-card"], div[class*="row"]'
+    );
+    for (const el of commItems) {
+        const text = el.innerText || '';
+        if (text.length > 400) continue;
+        const matchTo = text.match(toRe);
+        if (matchTo) {
+            bowler = matchTo[1].replace(/^(?:(?:WKT|WD|NB|LB|OUT|W|B)\s+)+/i, '').trim();
+            batsman = matchTo[2].trim();
+            if (!circleVal) {
+                const badgeEl = el.querySelector('span[class*="run"], span[class*="badge"], div[class*="run"]');
+                if (badgeEl) circleVal = badgeEl.innerText.trim();
+            }
+            break;
+        }
+    }
+
+    const allDivs = document.querySelectorAll('div');
+    for (const d of allDivs) {
+        const txt = d.innerText || '';
+        if (txt.length > 300 || txt.length < 8) continue;
+        if (txt.includes('Wkt #') || (txt.includes('OUT') && (txt.includes(' b ') || txt.includes('c ')))) {
+            const cardMatch = txt.match(/([A-Za-z][A-Za-z .'\-]{1,30}?)\s*(\d{1,3})\s*\(\s*(\d{1,3})\s*\)/);
+            if (cardMatch) {
+                const rawName = cardMatch[1]
+                    .replace(/\bOUT\b|\bWkt\s*#?\d*\b/gi, '')
+                    .replace(/\s+/g, ' ')
+                    .trim();
+                const bRuns = cardMatch[2].trim();
+                const bBalls = cardMatch[3].trim();
+
+                let howOut = '';
+                const howM = txt.match(
+                    /(c\s*&\s*b\s+[A-Za-z' .\-]+|\bc\s+[A-Za-z' .\-]+?\s+b\s+[A-Za-z' .\-]+|\bst\s+[A-Za-z' .\-]+?\s+b\s+[A-Za-z' .\-]+|lbw(?:\s+b\s+[A-Za-z' .\-]+)?|run\s*out|hit\s*wicket|\bb\s+[A-Za-z' .\-]+)/i
+                );
+                if (howM) howOut = howM[1].replace(/\s+/g, ' ').trim();
+
+                lastDismissal = { batter: rawName, runs: bRuns, balls: bBalls, howOut: howOut };
+                break;
+            }
+        }
+    }
+
+    const titleScoreMatch = title.match(/([A-Za-z0-9\-]+)\s+(\d{1,3})\s*[-/]\s*([0-9]|10)\s*\(/);
+    if (titleScoreMatch) {
+        runs = parseInt(titleScoreMatch[2], 10);
+        wkts = parseInt(titleScoreMatch[3], 10);
+    }
+    if (runs === null) {
+        const topScoreCards = document.querySelectorAll(
+            'div[class*="team-score"], div[class*="score-card"], div[class*="match-header"]'
+        );
+        for (const c of topScoreCards) {
+            const t = c.innerText || '';
+            const m = t.match(/([A-Za-z0-9\-]+)\s+(\d{1,3})\s*[-/]\s*([0-9]|10)\b/);
+            if (m) {
+                runs = parseInt(m[2], 10);
+                wkts = parseInt(m[3], 10);
+                break;
+            }
+        }
+    }
+
+    return {
+        ball: ballNum,
+        seq: seq,
+        circleVal: circleVal,
+        bowler: bowler,
+        batsman: batsman,
+        runs: runs,
+        wkts: wkts,
+        isOverComplete: isOverComplete,
+        isInningsBreak: isInningsBreak,
+        lastDismissal: lastDismissal,
+        overBalls: activeBalls
+    };
+}'''
+
+
+def _normalize_rendered_circle(snapshot):
+    """Normalize the live circle-strip snapshot emitted by final.py's Playwright extractor."""
+    if not isinstance(snapshot, dict):
+        return None
+    over = str(snapshot.get("ball") or "").strip()
+    token_value = snapshot.get("circleVal")
+    token = "" if token_value is None else str(token_value).strip().upper()
+    if not re.fullmatch(r"\d{1,3}\.\d{1,2}", over) or not token:
+        return None
+    bowler = str(snapshot.get("bowler") or "").strip()
+    batter = str(snapshot.get("batsman") or "").strip()
+    matchup = f"{bowler} to {batter}" if bowler and batter else ""
+    return {
+        "over": over,
+        "circle_val": token,
+        "runs": token,
+        "matchup": matchup,
+        "commentary": "",
+        "spoken_line": "",
+        "rendered_circle": True,
+        "browser_seq": str(snapshot.get("seq") or ""),
+    }
 
 
 def _walk_nested_objects(value):
@@ -536,6 +709,8 @@ class BroadcastHub:
         latest_event_version = 0
         pending_over_announcements: Dict[str, str] = {}
         announced_over_ids: set[str] = set()
+        # Snapshot from final.py's actual rendered CREX circle strip, polled separately.
+        rendered_circle_state: Dict[str, Any] = {"status": "starting", "ball": None, "updated_at": 0.0}
         # Only summarize overs whose first delivery was observed after this broadcast started.
         tracked_full_overs: set[int] = set()
 
@@ -549,6 +724,92 @@ class BroadcastHub:
                 except asyncio.QueueEmpty:
                     pass
             ball_queue.put_nowait(event)
+
+        async def rendered_circle_watcher() -> None:
+            """Read the live, rendered CREX circle strip using the same JS as final.py."""
+            if async_playwright is None:
+                rendered_circle_state.update({
+                    "status": "playwright_unavailable",
+                    "error": "Install Playwright and Chromium in the Render image.",
+                })
+                logger.warning("Rendered-circle watcher unavailable; using HTML/API fallback")
+                return
+
+            try:
+                async with async_playwright() as playwright:
+                    browser = await playwright.chromium.launch(
+                        headless=True,
+                        args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+                    )
+                    try:
+                        context = await browser.new_context(
+                            viewport={"width": 1280, "height": 800},
+                            user_agent=(
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/124.0.0.0 Safari/537.36"
+                            ),
+                        )
+                        page = await context.new_page()
+                        page.set_default_timeout(3500)
+
+                        async def light_route(route):
+                            if route.request.resource_type in {"image", "media", "font"}:
+                                await route.abort()
+                            else:
+                                await route.continue_()
+
+                        await page.route("**/*", light_route)
+                        await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+                        await page.wait_for_timeout(500)
+                        loop = asyncio.get_running_loop()
+                        last_key = None
+                        rendered_circle_state["status"] = "watching"
+
+                        while self.is_running:
+                            try:
+                                snapshot = await page.evaluate(CREX_CIRCLE_EXTRACT_JS)
+                                candidate = _normalize_rendered_circle(snapshot)
+                                if candidate:
+                                    key = (
+                                        candidate["over"],
+                                        candidate["circle_val"],
+                                        candidate["browser_seq"],
+                                        candidate["matchup"],
+                                    )
+                                    if key != last_key:
+                                        logger.info(
+                                            "Rendered CREX circle updated: %s [%s] %s",
+                                            candidate["over"], candidate["circle_val"],
+                                            candidate["matchup"],
+                                        )
+                                        last_key = key
+                                    rendered_circle_state.update({
+                                        "status": "live",
+                                        "ball": candidate,
+                                        "updated_at": loop.time(),
+                                        "seq": candidate["browser_seq"],
+                                        "error": "",
+                                    })
+                                await asyncio.sleep(0.35)
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as exc:
+                                rendered_circle_state.update({
+                                    "status": "poll_error",
+                                    "error": str(exc)[:160],
+                                })
+                                await asyncio.sleep(0.5)
+                    finally:
+                        await browser.close()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                rendered_circle_state.update({
+                    "status": "error",
+                    "error": str(exc)[:240],
+                })
+                logger.warning("Rendered CREX circle watcher failed; HTML/API fallback remains active: %s", exc)
 
         async def broadcast_audio_bytes(text: str, badge: str, mp3_data: bytes,
                                         kind: str) -> Optional[float]:
@@ -862,6 +1123,9 @@ class BroadcastHub:
         api_feed_task: Optional[asyncio.Task] = None
         api_feed_cache: list[Dict[str, Any]] = []
         api_feed_last_error = ""
+        rendered_circle_task: Optional[asyncio.Task] = asyncio.create_task(
+            rendered_circle_watcher(), name="rendered_crex_circle_watcher"
+        )
 
         try:
             logger.info("Starting CREX poll loop (0.75-second interval); speech backlog is disabled")
@@ -890,18 +1154,41 @@ class BroadcastHub:
                                 name="crex_live_circle_feed",
                             )
 
-                        html_text = await parser.fetch_html_async(session=session)
-                        if not html_text:
-                            await asyncio.sleep(0.75)
+                        # Bound slow HTML responses so the independent rendered-circle
+                        # watcher can still drive the latest delivery into the voice queue.
+                        try:
+                            html_text = await asyncio.wait_for(
+                                parser.fetch_html_async(session=session), timeout=1.0
+                            )
+                        except asyncio.TimeoutError:
+                            html_text = ""
+
+                        if html_text:
+                            fresh_data = parser.parse(html_text)
+                            dom_balls = list(fresh_data.get("balls") or [])
+                            state_balls = _extract_crex_state_balls(html_text)
+                        else:
+                            fresh_data = dict(last_latest_state or self.latest_match_state or {})
+                            dom_balls = []
+                            state_balls = []
+
+                        loop = asyncio.get_running_loop()
+                        rendered_ball = rendered_circle_state.get("ball")
+                        rendered_age = (
+                            max(0.0, loop.time() - float(rendered_circle_state.get("updated_at", 0.0)))
+                            if rendered_ball else 999.0
+                        )
+                        rendered_fresh = bool(rendered_ball and rendered_age <= 2.0)
+
+                        # The real rendered circle wins ties and outranks stale historic
+                        # feed entries. HTML/API remain fallback sources when Chromium is late.
+                        rendered_source = [rendered_ball] if rendered_fresh else []
+                        raw_balls = _merge_ball_sources(
+                            api_feed_cache, state_balls, dom_balls, rendered_source
+                        )
+                        if not fresh_data and not raw_balls:
+                            await asyncio.sleep(0.35)
                             continue
-
-                        fresh_data = parser.parse(html_text)
-                        dom_balls = list(fresh_data.get("balls") or [])
-                        state_balls = _extract_crex_state_balls(html_text)
-
-                        # Latest HTML, embedded state and background API circle values are
-                        # merged by delivery slot, with the most recent source refreshing it.
-                        raw_balls = _merge_ball_sources(api_feed_cache, state_balls, dom_balls)
                         if raw_balls:
                             fresh_data["balls"] = raw_balls
                             fresh_data["paragraphs"] = [
@@ -920,6 +1207,12 @@ class BroadcastHub:
                         feed_debug["dom_delivery_count"] = len(dom_balls)
                         feed_debug["embedded_state_delivery_count"] = len(state_balls)
                         feed_debug["api_refresh_in_flight"] = bool(api_feed_task and not api_feed_task.done())
+                        feed_debug["rendered_circle_status"] = rendered_circle_state.get("status")
+                        feed_debug["rendered_circle_error"] = rendered_circle_state.get("error", "")
+                        feed_debug["rendered_circle_age_seconds"] = round(rendered_age, 2) if rendered_fresh else None
+                        if rendered_fresh:
+                            feed_debug["rendered_ball_over"] = _normal_space(rendered_ball.get("over"))
+                            feed_debug["rendered_circle_value"] = _normal_space(rendered_ball.get("circle_val")).upper()
                         if raw_balls:
                             newest_circle = _latest_source_ball(raw_balls) or {}
                             feed_debug["latest_ball_over"] = _normal_space(newest_circle.get("over"))
@@ -937,6 +1230,25 @@ class BroadcastHub:
                         await self.broadcast_ws("match_state", fresh_data)
 
                         latest_ball = _latest_source_ball(raw_balls)
+                        if rendered_fresh and rendered_ball and (
+                            latest_ball is None or _ball_order(rendered_ball) >= _ball_order(latest_ball)
+                        ):
+                            latest_ball = rendered_ball
+
+                        # Baseline on the first real rendered circle instead of announcing the
+                        # current ball just because the browser watcher caught up after startup.
+                        if rendered_fresh and not rendered_circle_state.get("baseline_done"):
+                            rendered_circle_state["baseline_done"] = True
+                            if last_latest_key is not None and _ball_order(rendered_ball) > _ball_order(last_latest_ball or {}):
+                                last_latest_key = _ball_identity(rendered_ball)
+                                last_latest_ball = rendered_ball
+                                last_latest_state = fresh_data
+                                seen_feed_keys.add(last_latest_key)
+                                logger.info(
+                                    "Synced rendered circle at %s [%s]; voice starts on the next delivery",
+                                    rendered_ball.get("over"), rendered_ball.get("circle_val")
+                                )
+                                latest_ball = None
 
                         # Keep the visual ball-by-ball feed useful even when speech skips stale
                         # balls. On startup, don't replay the match's full historical feed.
@@ -1097,6 +1409,14 @@ class BroadcastHub:
             logger.error("Broadcast pipeline error: %s", exc, exc_info=True)
             await self.broadcast_ws("error", {"message": f"Pipeline error: {exc}"})
         finally:
+            if rendered_circle_task is not None and not rendered_circle_task.done():
+                rendered_circle_task.cancel()
+                try:
+                    await rendered_circle_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
             if api_feed_task is not None and not api_feed_task.done():
                 api_feed_task.cancel()
                 try:
@@ -1161,7 +1481,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-14",
+        "server_build": "circle-radio-20261021-15",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
