@@ -616,7 +616,7 @@ class BroadcastHub:
                         "audio_bytes": len(mp3_data),
                         "over": ball_over,
                     })
-                    logger.info("On-air current ball %s: %s", ball_over, source_text)
+                    logger.info("On-air current ball %s: %s", ball_over, radio_text)
 
                     # Wait for either the approximate clip duration or a new delivery. If a new
                     # delivery arrives first, immediately prioritize it; the browser replaces
