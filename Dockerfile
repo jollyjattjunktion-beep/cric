@@ -10,6 +10,7 @@ ENV PYTHONUNBUFFERED=1 \
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ffmpeg \
     curl \
+    git \
     fonts-dejavu-core \
     fonts-freefont-ttf \
     && rm -rf /var/lib/apt/lists/*
