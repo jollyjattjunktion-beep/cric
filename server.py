@@ -291,6 +291,7 @@ class BroadcastHub:
         self.latest_commentary = ""
         self.latest_feed_debug: Dict[str, Any] = {"status": "not_started"}
         self.latest_tts_debug: Dict[str, Any] = {"status": "not_started"}
+        self.latest_start_debug: Dict[str, Any] = {"status": "not_started"}
 
     async def broadcast_ws(self, msg_type: str, data: Any):
         """Pushes real-time JSON payload to all connected browser clients."""
@@ -313,9 +314,27 @@ class BroadcastHub:
         if not url:
             return {"ok": False, "error": "Match link or search query is required."}
 
-        # Smart Match Resolution: Accepts CREX (any tab/year), Cricbuzz, Cricinfo, or plain text
-        resolved_url, resolve_note = resolve_match_url(url)
-        target_url = resolved_url if resolved_url else url
+        # Log start attempts so /api/status explains why the pipeline is idle.
+        self.latest_start_debug = {
+            "status": "resolving_match",
+            "url": url[:320],
+            "language": lang,
+            "voice_engine": tts_provider,
+        }
+        try:
+            # Smart Match Resolution: accepts a CREX URL or a supported match query.
+            resolved_url, resolve_note = resolve_match_url(url)
+            target_url = resolved_url if resolved_url else url
+            self.latest_start_debug.update({"status": "fetching_match_page", "resolved_url": target_url[:320]})
+        except Exception as exc:
+            self.latest_start_debug = {
+                **self.latest_start_debug,
+                "status": "error",
+                "phase": "resolve_match_url",
+                "error": str(exc)[:500],
+            }
+            logger.exception("Broadcast start failed during match resolution")
+            return {"ok": False, "error": f"Could not resolve match URL: {exc}"}
         source_lang = "hi" if lang in ("hi", "hinglish") else "en"
 
         # Pre-flight check: request CREX's actual source-language commentary.
@@ -323,6 +342,12 @@ class BroadcastHub:
         try:
             html_text = await parser.fetch_html_async()
             if not html_text:
+                self.latest_start_debug = {
+                    **self.latest_start_debug,
+                    "status": "error",
+                    "phase": "fetch_match_page",
+                    "error": "Unable to fetch content from match URL.",
+                }
                 return {"ok": False, "error": "Unable to fetch content from match URL."}
             init_data = parser.parse(html_text)
             self.latest_match_state = init_data
@@ -341,12 +366,31 @@ class BroadcastHub:
                 except Exception as fe:
                     return {"ok": False, "error": f"Match link failed: {fe}"}
             else:
+                self.latest_start_debug = {
+                    **self.latest_start_debug,
+                    "status": "error",
+                    "phase": "preflight_fetch",
+                    "error": str(ve)[:500],
+                }
+                logger.warning("Broadcast start preflight rejected match URL: %s", ve)
                 return {"ok": False, "error": str(ve)}
         except Exception as e:
-            logger.warning(f"Pre-flight connection error: {e}")
+            logger.warning(f"Pre-flight connection error: {e}", exc_info=True)
+            self.latest_start_debug = {
+                **self.latest_start_debug,
+                "status": "error",
+                "phase": "preflight",
+                "error": str(e)[:500],
+            }
             return {"ok": False, "error": f"Failed to connect to match URL: {e}"}
 
         self.is_running = True
+        self.latest_start_debug = {
+            **self.latest_start_debug,
+            "status": "running",
+            "phase": "pipeline_scheduled",
+            "resolved_url": target_url[:320],
+        }
         self.broadcast_task = asyncio.create_task(self._run_broadcast_pipeline(
             target_url, lang, stream_key, parser=parser,
             tts_provider=tts_provider, tts_api_key=tts_api_key, tts_speaker=tts_speaker
@@ -395,6 +439,11 @@ class BroadcastHub:
             return {"ok": False, "error": "Broadcast is not running"}
 
         self.is_running = False
+        self.latest_start_debug = {
+            **self.latest_start_debug,
+            "status": "stopped",
+            "phase": "user_stop",
+        }
 
         # Stop YouTube Live engine if active
         if self.youtube_engine:
@@ -749,7 +798,15 @@ class BroadcastHub:
             logger.error("Broadcast pipeline error: %s", exc, exc_info=True)
             await self.broadcast_ws("error", {"message": f"Pipeline error: {exc}"})
         finally:
+            was_running = self.is_running
             self.is_running = False
+            if self.latest_start_debug.get("status") == "running":
+                self.latest_start_debug = {
+                    **self.latest_start_debug,
+                    "status": "pipeline_stopped",
+                    "phase": "pipeline_finally",
+                    "note": "Pipeline ended or encountered an unrecoverable error; inspect Render logs.",
+                }
             if not voice_task.done():
                 voice_task.cancel()
                 try:
@@ -796,6 +853,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "latest_commentary": hub.latest_commentary,
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
+        "start_debug": hub.latest_start_debug,
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
@@ -829,9 +887,15 @@ async def handle_api_start(request: web.Request) -> web.Response:
         if tts_provider == "sarvam" and not tts_api_key:
             return web.json_response({"ok": False, "error": "Sarvam API key is required to use the Sarvam voice engine"}, status=400)
 
+        logger.info("Received /api/start request (url=%s, lang=%s, tts_provider=%s)",
+                    url[:320], lang, tts_provider)
         res = await hub.start_broadcast(url=url, lang=lang, stream_key=stream_key,
                                          tts_provider=tts_provider, tts_api_key=tts_api_key, tts_speaker=tts_speaker)
         status_code = 200 if res.get("ok") else 400
+        if res.get("ok"):
+            logger.info("Broadcast start accepted (url=%s)", (res.get("resolved_url") or url)[:320])
+        else:
+            logger.error("Broadcast start rejected: %s", res.get("error", "unknown error"))
         return web.json_response(res, status=status_code)
     except Exception as e:
         return web.json_response({"ok": False, "error": str(e)}, status=500)
