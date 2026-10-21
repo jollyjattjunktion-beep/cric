@@ -850,8 +850,22 @@ class BroadcastHub:
             async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
                 while self.is_running:
                     try:
-                        # Fetch CREX's API circle feed in the background so a slow API request
-                        # never blocks the fast HTML scoreboard poll.
+                        # Harvest the background feed before HTML parsing. This also
+                        # works if one HTML request returns empty or times out.
+                        if api_feed_task is not None and api_feed_task.done():
+                            try:
+                                result = api_feed_task.result()
+                                if result:
+                                    api_feed_cache = list(result)
+                                api_feed_last_error = ""
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as api_exc:
+                                api_feed_last_error = str(api_exc)[:180]
+                                logger.debug("Background CREX circle refresh failed: %s", api_feed_last_error)
+                            api_feed_task = None
+
+                        # Never await this API call in the scoreboard loop.
                         if api_feed_task is None:
                             api_feed_task = asyncio.create_task(
                                 parser.fetch_ball_feeds_async(session=session),
@@ -867,28 +881,8 @@ class BroadcastHub:
                         dom_balls = list(fresh_data.get("balls") or [])
                         state_balls = _extract_crex_state_balls(html_text)
 
-                        # Harvest an API refresh only when it is ready. Never await the network
-                        # request in the scoreboard loop, so the score itself keeps moving.
-                        if api_feed_task is not None and api_feed_task.done():
-                            try:
-                                result = api_feed_task.result()
-                                if result:
-                                    api_feed_cache = list(result)
-                                api_feed_last_error = ""
-                            except asyncio.CancelledError:
-                                raise
-                            except Exception as api_exc:
-                                api_feed_last_error = str(api_exc)[:180]
-                                logger.debug("Background CREX circle refresh failed: %s", api_feed_last_error)
-                            api_feed_task = None
-
-                        # Start the next refresh immediately after the previous call completes.
-                        if api_feed_task is None:
-                            api_feed_task = asyncio.create_task(
-                                parser.fetch_ball_feeds_async(session=session),
-                                name="crex_live_circle_feed",
-                            )
-
+                        # Latest HTML, embedded state and background API circle values are
+                        # merged by delivery slot, with the most recent source refreshing it.
                         raw_balls = _merge_ball_sources(dom_balls, state_balls, api_feed_cache)
                         if raw_balls:
                             fresh_data["balls"] = raw_balls
@@ -1147,7 +1141,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-11",
+        "server_build": "circle-radio-20261021-12",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
