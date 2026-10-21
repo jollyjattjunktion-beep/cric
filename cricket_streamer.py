@@ -219,7 +219,7 @@ class CrexParser:
         if not match_key:
             logger.warning("Unable to derive CREX match key from URL: %s", self.url)
             self._feed_cache = []
-        return []
+            return []
 
         common_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
