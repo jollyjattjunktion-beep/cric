@@ -100,7 +100,8 @@ def _iter_ball_feed_items(value):
         has_ball_text = any(key in keys for key in (
             "c2", "c", "commentary", "description", "comment", "balltext"
         ))
-        if has_over and has_ball_text:
+        has_circle_value = any(key in keys for key in ("b", "runs", "ball"))
+        if has_over and (has_ball_text or has_circle_value):
             yield value
             return
         for child in value.values():
