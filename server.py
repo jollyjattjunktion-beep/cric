@@ -59,7 +59,7 @@ CREX_CIRCLE_EXTRACT_JS = r'''() => {
     const EXTRA_RE = /(?:wd|wide|nb|no\s*ball)/i;
     const BALL_TOKEN = /^(?:[0-6]|w|wkt|out|wd|wide|nb|no\s*ball|lb|b|•|\d+\s*(?:wd|nb|lb|b)|(?:wd|nb|lb|b)\s*\+?\s*\d+)$/i;
 
-    if (/\((?:10\.0\vert{}20\.0\vert{}50\.0)\)/.test(title) || /Innings Break/i.test(bodyText) || /-10\b/.test(title)) {
+    if (/\((?:10\.0|20\.0|50\.0)\)/.test(title) || /Innings Break/i.test(bodyText) || /-10\b/.test(title)) {
         isInningsBreak = true;
     }
 
@@ -1509,7 +1509,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-16",
+        "server_build": "circle-radio-20261021-17",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
