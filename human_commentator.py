@@ -355,7 +355,7 @@ class HumanCommentator:
             "batter": batter,
             "is_over_start": is_over_start,
             "is_over_end": is_over_end,
-            "completed_overs": over_number if is_over_end else over_number - 1 if is_over_end and over_number is not None else over_number,
+            "completed_overs": over_number if is_over_end else None,
         }
 
     async def humanize_async(
