@@ -156,8 +156,18 @@
         updateScoreboard(msg.data);
         break;
 
+      case "commentary_preview":
+        handleCommentaryPreview(msg.data);
+        break;
+
       case "commentary":
         handleCommentary(msg.data);
+        break;
+
+      case "tts_error":
+        if (msg.data && msg.data.message) {
+          playerStateText.textContent = "Audio generation failed for ball " + (msg.data.over || "") + ": " + msg.data.message;
+        }
         break;
 
       case "feed_item":
@@ -350,7 +360,38 @@
   document.addEventListener("click", unlockAudio, { once: true });
   document.addEventListener("touchstart", unlockAudio, { once: true });
 
+  let commentaryTimeout = null;
+
+  function handleCommentaryPreview(data) {
+    if (!data) return;
+    if (commentaryTimeout) {
+      clearTimeout(commentaryTimeout);
+      commentaryTimeout = null;
+    }
+
+    // Replace stale on-air text immediately when a new circle is detected.
+    speakingText.textContent = `"${data.text || "New delivery detected."}"`;
+    onAirBadge.className = "on-air-badge waiting";
+    onAirText.textContent = `${data.badge || "NEW BALL"} • PREPARING AUDIO`;
+    waveform.className = "waveform";
+    playerStateText.textContent = `Preparing Madhur audio for ${data.over || "the latest ball"} [${data.circle_value || "?"}]...`;
+
+    // Never leave the previous ball playing while a new circle is waiting for TTS.
+    if (audioPlayer) {
+      try {
+        audioPlayer.pause();
+        audioPlayer.currentTime = 0;
+        audioPlayer.removeAttribute("src");
+        audioPlayer.load();
+      } catch (_) {}
+    }
+  }
+
   function handleCommentary(data) {
+    if (commentaryTimeout) {
+      clearTimeout(commentaryTimeout);
+      commentaryTimeout = null;
+    }
     speakingText.textContent = `"${data.text}"`;
     setTalkingState(true, data.badge);
 
@@ -375,7 +416,8 @@
 
     // Reset talking state after duration
     const durMs = (data.duration || 4.0) * 1000;
-    setTimeout(() => {
+    commentaryTimeout = setTimeout(() => {
+      commentaryTimeout = null;
       setTalkingState(false);
     }, durMs);
   }
