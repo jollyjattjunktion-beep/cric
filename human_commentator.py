@@ -49,6 +49,39 @@ def _player_names(info: Dict[str, Any]) -> tuple[str, str]:
 
     return bowler, batter
 
+def _active_batter_score(info: Dict[str, Any], lang: str) -> str:
+    """Short scorecard suffix from the live scoreboard, never from c2 commentary."""
+    players = []
+    for prefix in ("striker", "non_striker"):
+        name = _space(info.get(prefix))
+        runs = info.get(f"{prefix}_runs")
+        balls = info.get(f"{prefix}_balls")
+        if not name or name.lower().startswith("batter ") or runs is None or balls is None:
+            continue
+        try:
+            runs_i, balls_i = int(runs), int(balls)
+        except (TypeError, ValueError):
+            continue
+        identity = _compact(name)
+        if any(item[0] == identity for item in players):
+            continue
+        players.append((identity, name, runs_i, balls_i))
+
+    if not players:
+        return ""
+    batting_line = ", ".join(f"{name} {runs} off {balls}" for _, name, runs, balls in players)
+    team_runs, team_wickets = info.get("total_runs"), info.get("total_wickets")
+    try:
+        score = f"{int(team_runs)}/{int(team_wickets)}"
+    except (TypeError, ValueError):
+        score = ""
+    if lang == "hinglish":
+        return f"Live score {score}. Batters: {batting_line}." if score else f"Batters: {batting_line}."
+    if lang == "hi":
+        return f"स्कोर {score}। बल्लेबाज़: {batting_line}।" if score else f"बल्लेबाज़: {batting_line}।"
+    return f"Score {score}. Batters: {batting_line}." if score else f"Batters: {batting_line}."
+
+
 
 def _wicket_type(source: str) -> str:
     text = (source or "").lower()
@@ -275,14 +308,16 @@ class HumanCommentator:
         gemini_api_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         info = ball_info or {}
+        # Circle value is the single source of truth for the spoken event.
+        # "runs" remains a backward-compatible fallback for existing parsers.
         source = _space(info.get("commentary") or raw_text)
-        runs = _space(info.get("runs", ""))
+        runs = _space(info.get("circle_val") or info.get("runs", ""))
         token = _compact(runs)
-        event_info = self.classify(source, runs)
+        event_info = self.classify("", token)
 
         over_text = _space(info.get("over"))
         match = re.search(r"(\d+)\.(\d+)", over_text)
-        over_number = int(match.group(1)) if match else None
+        over_number = int(match.group(1)) + 1 if match else None
         ball_number = int(match.group(2)) if match else None
         is_legal_ball = not any(k in token for k in ("wd", "wide", "nb", "noball", "no-ball"))
         is_over_end = ball_number == 6 and is_legal_ball
@@ -291,16 +326,36 @@ class HumanCommentator:
         bowler, batter = _player_names(info)
         spoken_text = self._radio_line(source, event_info["event"], token, bowler, batter, lang)
 
+        # Prefix the ball number using the same completed-over convention as final.py.
+        if over_number is not None and ball_number is not None:
+            if lang == "hinglish":
+                ball_word = {1: "pehli", 2: "doosri", 3: "teesri", 4: "chauthi", 5: "paanchvi", 6: "aakhri"}.get(ball_number, str(ball_number))
+                spoken_text = f"Over {over_number} ki {ball_word} ball. {spoken_text}"
+            elif lang == "hi":
+                ball_word = {1: "पहली गेंद", 2: "दूसरी गेंद", 3: "तीसरी गेंद", 4: "चौथी गेंद", 5: "पाँचवीं गेंद", 6: "आखिरी गेंद"}.get(ball_number, f"{ball_number}वीं गेंद")
+                over_word = {1: "पहले", 2: "दूसरे", 3: "तीसरे", 4: "चौथे", 5: "पाँचवें", 6: "छठे", 7: "सातवें", 8: "आठवें", 9: "नौवें", 10: "दसवें", 20: "बीसवें"}.get(over_number, f"{over_number}वें")
+                spoken_text = f"{over_word} ओवर की {ball_word}। {spoken_text}"
+            else:
+                spoken_text = f"Over {over_number}, ball {ball_number}. {spoken_text}"
+
+        # Append the scorecard only when the circle records a scoring event or wicket;
+        # dot balls stay short so speech can keep up with the live feed.
+        if event_info["event"] in {"runs", "four", "six", "wicket"}:
+            score_context = _active_batter_score(info, lang)
+            if score_context:
+                spoken_text = f"{spoken_text} {score_context}"
+
         return {
             "spoken_text": spoken_text,
             "source_text": source,
-            "should_speak": bool(source or runs),
+            "circle_val": token,
+            "should_speak": bool(token),
             **event_info,
             "bowler": bowler,
             "batter": batter,
             "is_over_start": is_over_start,
             "is_over_end": is_over_end,
-            "completed_overs": over_number + 1 if is_over_end and over_number is not None else over_number,
+            "completed_overs": over_number if is_over_end else over_number - 1 if is_over_end and over_number is not None else over_number,
         }
 
     async def humanize_async(
