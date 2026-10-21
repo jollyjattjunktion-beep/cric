@@ -273,7 +273,7 @@ class CrexParser:
 
         for version, endpoint, payload in attempts:
             try:
-                timeout = aiohttp.ClientTimeout(total=7.0)
+                timeout = aiohttp.ClientTimeout(total=3.5)
                 if session and not session.closed:
                     async with session.post(
                         endpoint, headers=common_headers, json=payload, timeout=timeout
