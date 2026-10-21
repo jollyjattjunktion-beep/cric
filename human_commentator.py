@@ -109,12 +109,12 @@ class HumanCommentator:
             kind = _wicket_type(source)
             if lang == "en":
                 english_wicket_lines = {
-                    "caught": f"Caught! {batter} is gone — {bowler} gets the breakthrough!",
-                    "bowled": f"Bowled! {bowler knocks the stumps over — {batter} has to go!",
-                    "lbw": f"LBW! The appeal is up and the wicket is given — {batter} is out!",
-                    "runout": f"Run out! Sharp fielding and a quick throw — {batter} is gone!",
+                    "caught": f"Caught! {batter} is gone. {bowler} gets the breakthrough!",
+                    "bowled": f"Bowled! {bowler} knocks the stumps over. {batter} has to go!",
+                    "lbw": f"LBW! The appeal is up and the wicket is given. {batter} is out!",
+                    "runout": f"Run out! Sharp fielding and a quick throw. {batter} is gone!",
                     "stumped": f"Stumped! The keeper is quick and {batter} is out!",
-                    "wicket": f"Wicket! {batter} is out — a big breakthrough for {bowler}!",
+                    "wicket": f"Wicket! {batter} is out. A big breakthrough for {bowler}!",
                 }
                 return english_wicket_lines[kind]
             if hinglish:
