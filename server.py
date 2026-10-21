@@ -216,6 +216,51 @@ def _ball_identity(ball: Dict[str, Any]) -> str:
         return f"{over}|{matchup}|{runs}|{text}"
     return f"{over}|{matchup}|{runs}"
 
+def _ball_slot_key(ball: Dict[str, Any]) -> str:
+    """Stable source-merge slot for one over.ball position."""
+    over = _normal_space(ball.get("over")).lower()
+    match = re.fullmatch(r"(\d{1,3})\.(\d{1,2})", over)
+    if match:
+        return f"{int(match.group(1))}.{int(match.group(2))}"
+    return _ball_identity(ball)
+
+
+def _merge_ball_sources(*sources: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
+    """Merge DOM, embedded state and API feeds; later sources refresh the same circle slot."""
+    merged: Dict[str, Dict[str, Any]] = {}
+    for source in sources:
+        for raw_ball in source or []:
+            if not isinstance(raw_ball, dict):
+                continue
+            ball = dict(raw_ball)
+            slot = _ball_slot_key(ball)
+            existing = dict(merged.get(slot, {}))
+            # Preserve useful commentary/matchup when an API only has the circle value.
+            for key, value in ball.items():
+                if value is not None and value != "":
+                    existing[key] = value
+            token = _normal_space(ball.get("circle_val", ball.get("runs", ""))).upper()
+            if token:
+                existing["circle_val"] = token
+                existing["runs"] = token
+            merged[slot] = existing
+
+    return sorted(
+        merged.values(),
+        key=lambda item: _ball_order(item),
+    )
+
+
+def _ball_identity(ball: Dict[str, Any]) -> str:
+    """Stable delivery identity that doesn't change if CREX refreshes the commentary wording."""
+    over = _normal_space(ball.get("over")).lower()
+    matchup = _normal_space(ball.get("matchup")).lower()
+    runs = _normal_space(ball.get("circle_val", ball.get("runs"))).upper()
+    if not over or over.lower() == "live":
+        text = _normal_space(ball.get("commentary"))[:100].lower()
+        return f"{over}|{matchup}|{runs}|{text}"
+    return f"{over}|{matchup}|{runs}"
+
 
 def _delivery_stats(token: Any) -> tuple[int, bool, int, int, int]:
     """Return (runs, legal_ball, fours, sixes, wickets) from the source's delivery badge."""
@@ -732,43 +777,66 @@ class BroadcastHub:
         }
         connector = aiohttp.TCPConnector(limit=10, keepalive_timeout=60)
         consecutive_errors = 0
+        api_feed_task: Optional[asyncio.Task] = None
+        api_feed_cache: list[Dict[str, Any]] = []
+        api_feed_last_error = ""
 
         try:
             logger.info("Starting CREX poll loop (0.75-second interval); speech backlog is disabled")
             async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
                 while self.is_running:
                     try:
+                        # Fetch CREX's API circle feed in the background so a slow API request
+                        # never blocks the fast HTML scoreboard poll.
+                        if api_feed_task is None:
+                            api_feed_task = asyncio.create_task(
+                                parser.fetch_ball_feeds_async(session=session),
+                                name="crex_live_circle_feed",
+                            )
+
                         html_text = await parser.fetch_html_async(session=session)
                         if not html_text:
                             await asyncio.sleep(0.75)
                             continue
 
                         fresh_data = parser.parse(html_text)
-                        raw_balls = fresh_data.get("balls") or []
+                        dom_balls = list(fresh_data.get("balls") or [])
+                        state_balls = _extract_crex_state_balls(html_text)
 
-                        # First inspect CREX's embedded app-root-state: it is often populated
-                        # even when the visible commentary cards are not server-rendered.
-                        if not raw_balls:
-                            state_balls = _extract_crex_state_balls(html_text)
-                            if state_balls:
-                                raw_balls = state_balls
-                                fresh_data["balls"] = state_balls
-                                fresh_data["paragraphs"] = [b.get("spoken_line", "") for b in state_balls]
+                        # Harvest an API refresh only when it is ready. Never await the network
+                        # request in the scoreboard loop, so the score itself keeps moving.
+                        if api_feed_task is not None and api_feed_task.done():
+                            try:
+                                result = api_feed_task.result()
+                                if result:
+                                    api_feed_cache = list(result)
+                                api_feed_last_error = ""
+                            except asyncio.CancelledError:
+                                raise
+                            except Exception as api_exc:
+                                api_feed_last_error = str(api_exc)[:180]
+                                logger.debug("Background CREX circle refresh failed: %s", api_feed_last_error)
+                            api_feed_task = None
 
-                        # If there is still no source text, try CREX's own live commentary endpoint.
-                        if not raw_balls:
-                            feed_balls = await parser.fetch_ball_feeds_async(session=session)
-                            if feed_balls:
-                                raw_balls = feed_balls
-                                fresh_data["balls"] = feed_balls
-                                fresh_data["paragraphs"] = [b.get("spoken_line", "") for b in feed_balls]
-                            else:
-                                logger.warning(
-                                    "No source ball commentary found. URL=%s; scoreboard=%s/%s at %s overs. "
-                                    "Check whether CREX's app-root-state or commentary endpoint response has changed.",
-                                    url, fresh_data.get("total_runs"), fresh_data.get("total_wickets"),
-                                    fresh_data.get("overs")
-                                )
+                        # Start the next refresh immediately after the previous call completes.
+                        if api_feed_task is None:
+                            api_feed_task = asyncio.create_task(
+                                parser.fetch_ball_feeds_async(session=session),
+                                name="crex_live_circle_feed",
+                            )
+
+                        raw_balls = _merge_ball_sources(dom_balls, state_balls, api_feed_cache)
+                        if raw_balls:
+                            fresh_data["balls"] = raw_balls
+                            fresh_data["paragraphs"] = [
+                                b.get("spoken_line", "") for b in raw_balls
+                            ]
+                        else:
+                            logger.warning(
+                                "No CREX circle feed yet. URL=%s; scoreboard=%s/%s at %s overs; api_error=%s",
+                                url, fresh_data.get("total_runs"), fresh_data.get("total_wickets"),
+                                fresh_data.get("overs"), api_feed_last_error,
+                            )
 
                         feed_debug = dict(getattr(parser, "_feed_debug", {}) or {})
                         feed_debug["parser_delivery_count"] = len(raw_balls)
@@ -890,6 +958,14 @@ class BroadcastHub:
             logger.error("Broadcast pipeline error: %s", exc, exc_info=True)
             await self.broadcast_ws("error", {"message": f"Pipeline error: {exc}"})
         finally:
+            if api_feed_task is not None and not api_feed_task.done():
+                api_feed_task.cancel()
+                try:
+                    await api_feed_task
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
             was_running = self.is_running
             self.is_running = False
             if self.latest_start_debug.get("status") == "running":
@@ -946,7 +1022,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-5",
+        "server_build": "circle-radio-20261021-6",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
