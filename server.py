@@ -22,7 +22,7 @@ from aiohttp import web
 
 # Import existing core modules
 from cricket_streamer import CrexParser, create_tts, get_live_matches, resolve_match_url
-from src.human_commentator import commentator
+from human_commentator import commentator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -32,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger("WebServer")
 
 BASE_DIR = Path(__file__).resolve().parent
-WEB_DIR = BASE_DIR / "web"
+WEB_DIR = BASE_DIR  # Flat project: index.html, app.js and style.css sit beside server.py.
 
 
 # ---------------- Current-ball-only speech helpers ----------------
