@@ -607,21 +607,12 @@ class BroadcastHub:
                         logger.info("Skipping delivery %s because CREX has no circle value or commentary text", ball_over)
                         continue
 
-                    # The visual feed keeps the original CREX text. The speaker uses a short,
-                    # locally built radio call so Edge can synthesize it much sooner.
-                    metadata = commentator.humanize(
-                        source_text,
-                        ball_info={**current_event["fresh_data"], **ball,
-                                   "circle_val": circle_token, "runs": circle_token, "over": ball_over},
-                        lang=lang
-                    )
-                    metadata = metadata or {}
-                    # Never read CREX's commentary paragraph aloud. Manual radio text must
-                    # exist even if the page has not returned any c2/source paragraph.
-                    radio_text = _normal_space(metadata.get("spoken_text") or f"Live ball {ball_over}.")
-                    badge = metadata.get("badge") or _source_badge(ball)
-                    rate = metadata.get("rate") or "+15%"
-                    pitch = metadata.get("pitch") or "+10Hz"
+                    # The producer already built this call directly from the CREX circle
+                    # token. Never synthesize or fall back to the scraped commentary paragraph.
+                    radio_text = _normal_space(current_event.get("radio_text") or f"Live ball {ball_over}.")
+                    badge = current_event.get("badge") or _source_badge(ball)
+                    rate = current_event.get("rate") or "+15%"
+                    pitch = current_event.get("pitch") or "+10Hz"
 
                     self.latest_tts_debug = {
                         "status": "generating",
@@ -720,6 +711,8 @@ class BroadcastHub:
                         "status": "audio_broadcast",
                         "audio_bytes": len(mp3_data),
                         "over": ball_over,
+                        "circle_value": circle_token,
+                        "radio_text_preview": radio_text[:180],
                     })
                     logger.info("On-air current ball %s: %s", ball_over, radio_text)
 
@@ -923,10 +916,63 @@ class BroadcastHub:
                                         {"id": over_id, "text": summary}
                                         for over_id, summary in pending_over_announcements.items()
                                     ]
+                                    # Generate the manual circle call immediately at detection,
+                                    # publish its text now, then synthesize audio asynchronously.
+                                    circle_token = _normal_space(
+                                        latest_ball.get("circle_val", latest_ball.get("runs", ""))
+                                    ).upper()
+                                    live_info = {
+                                        **fresh_data,
+                                        **latest_ball,
+                                        "circle_val": circle_token,
+                                        "runs": circle_token,
+                                        "over": _normal_space(latest_ball.get("over")),
+                                    }
+                                    radio_meta = commentator.humanize(
+                                        "",
+                                        ball_info=live_info,
+                                        lang=lang,
+                                    ) or {}
+                                    radio_preview = _normal_space(
+                                        radio_meta.get("spoken_text") or f"Live ball {live_info['over']}."
+                                    )
+                                    radio_badge = radio_meta.get("badge") or _source_badge(latest_ball)
+                                    radio_rate = radio_meta.get("rate") or "+15%"
+                                    radio_pitch = radio_meta.get("pitch") or "+10Hz"
+
+                                    self.latest_commentary = radio_preview
+                                    self.latest_tts_debug = {
+                                        "status": "queued_for_tts",
+                                        "provider": tts_provider,
+                                        "voice": getattr(tts, "voice", None) or getattr(tts, "speaker", None),
+                                        "language": lang,
+                                        "over": live_info["over"],
+                                        "circle_value": circle_token,
+                                        "radio_text_preview": radio_preview[:180],
+                                        "rate": radio_rate,
+                                        "pitch": radio_pitch,
+                                        "active_striker": fresh_data.get("striker"),
+                                        "active_striker_score": fresh_data.get("striker_runs"),
+                                        "active_striker_balls": fresh_data.get("striker_balls"),
+                                        "active_non_striker": fresh_data.get("non_striker"),
+                                        "active_non_striker_score": fresh_data.get("non_striker_runs"),
+                                        "active_non_striker_balls": fresh_data.get("non_striker_balls"),
+                                    }
+                                    await self.broadcast_ws("commentary_preview", {
+                                        "text": radio_preview,
+                                        "badge": radio_badge,
+                                        "over": live_info["over"],
+                                        "circle_value": circle_token,
+                                        "status": "preparing_audio",
+                                    })
                                     await queue_latest({
                                         "version": latest_event_version,
                                         "ball": latest_ball,
                                         "fresh_data": fresh_data,
+                                        "radio_text": radio_preview,
+                                        "badge": radio_badge,
+                                        "rate": radio_rate,
+                                        "pitch": radio_pitch,
                                         "over_announcements": pending_summaries,
                                     })
                                 else:
@@ -1022,7 +1068,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-6",
+        "server_build": "circle-radio-20261021-7",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
