@@ -555,10 +555,9 @@ class BroadcastHub:
                     pass
             ball_queue.put_nowait(event)
 
-        async def broadcast_audio(text: str, badge: str, rate: Optional[str],
-                                  pitch: Optional[str], kind: str) -> Optional[float]:
-            """Synthesize to bytes and broadcast a data URI; no audio files are written."""
-            mp3_data = await tts.speak_mp3(text, rate=rate, pitch=pitch)
+        async def broadcast_audio_bytes(text: str, badge: str, mp3_data: bytes,
+                                        kind: str) -> Optional[float]:
+            """Broadcast already-generated MP3 without delaying a newer circle."""
             if not mp3_data:
                 logger.warning("TTS returned empty audio for event type %s", kind)
                 return None
@@ -575,6 +574,19 @@ class BroadcastHub:
             })
             logger.info("Broadcast in-memory audio (%s, approx %.1fs): %s", kind, duration, text)
             return duration
+
+        async def broadcast_audio(text: str, badge: str, rate: Optional[str],
+                                  pitch: Optional[str], kind: str) -> Optional[float]:
+            """Short timeout wrapper for rare non-ball announcements."""
+            try:
+                mp3_data = await asyncio.wait_for(
+                    tts.speak_mp3(text, rate=rate, pitch=pitch),
+                    timeout=4.5,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("TTS timed out for event type %s", kind)
+                return None
+            return await broadcast_audio_bytes(text, badge, mp3_data, kind)
 
         async def voice_worker():
             """Speak pending over summaries and the single newest delivery, never a ball backlog."""
@@ -644,7 +656,7 @@ class BroadcastHub:
                     next_delivery_task = asyncio.create_task(ball_queue.get())
                     done, _ = await asyncio.wait(
                         {tts_task, next_delivery_task},
-                        timeout=8.0,
+                        timeout=4.5,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
 
@@ -678,7 +690,7 @@ class BroadcastHub:
                         await asyncio.gather(tts_task, next_delivery_task, return_exceptions=True)
                         self.latest_tts_debug.update({
                             "status": "timeout",
-                            "error": "TTS exceeded the 8-second low-latency limit",
+                            "error": "TTS exceeded the 4.5-second low-latency limit",
                             "over": ball_over,
                         })
                         logger.warning("TTS timed out for ball %s; waiting for the next delivery", ball_over)
@@ -745,15 +757,48 @@ class BroadcastHub:
                             over_id = summary["id"]
                             if over_id in announced_over_ids:
                                 continue
-                            recap_duration = await broadcast_audio(
-                                summary["text"], "OVER COMPLETE", "+5%", "+0Hz", "over_summary"
+
+                            # Synthesize an over recap concurrently with waiting for the next
+                            # delivery. A new circle always wins; the recap is cancelled rather
+                            # than holding up the next ball.
+                            recap_task = asyncio.create_task(
+                                tts.speak_mp3(summary["text"], rate="+5%", pitch="+0Hz")
+                            )
+                            next_ball_task = asyncio.create_task(ball_queue.get())
+                            recap_done, _ = await asyncio.wait(
+                                {recap_task, next_ball_task},
+                                timeout=4.5,
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                            if next_ball_task in recap_done:
+                                event = next_ball_task.result()
+                                if not recap_task.done():
+                                    recap_task.cancel()
+                                await asyncio.gather(recap_task, return_exceptions=True)
+                                break
+                            if recap_task not in recap_done:
+                                if not recap_task.done():
+                                    recap_task.cancel()
+                                if not next_ball_task.done():
+                                    next_ball_task.cancel()
+                                await asyncio.gather(recap_task, next_ball_task, return_exceptions=True)
+                                logger.warning("Over recap timed out; keep it pending for a later quiet period")
+                                continue
+                            if not next_ball_task.done():
+                                next_ball_task.cancel()
+                                await asyncio.gather(next_ball_task, return_exceptions=True)
+
+                            recap_mp3 = recap_task.result()
+                            if current_event["version"] != latest_event_version:
+                                event = None
+                                break
+                            recap_duration = await broadcast_audio_bytes(
+                                summary["text"], "OVER COMPLETE", recap_mp3, "over_summary"
                             )
                             if recap_duration is None:
                                 continue
                             announced_over_ids.add(over_id)
                             pending_over_announcements.pop(over_id, None)
-                            # Let the recap play unless a live ball arrives, in which case
-                            # the next iteration immediately prioritizes that ball.
                             try:
                                 event = await asyncio.wait_for(ball_queue.get(), timeout=recap_duration)
                             except asyncio.TimeoutError:
@@ -1102,7 +1147,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-10",
+        "server_build": "circle-radio-20261021-11",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
