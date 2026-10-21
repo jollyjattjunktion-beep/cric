@@ -52,12 +52,12 @@ DEFAULT_URL = (
     "https://crex.com/cricket-live-score/"
     "abd-vs-emb-2nd-semi-final-emirates-d10-league-2026-match-updates-14NA"
 )
-POLL_SECONDS = 2.0
-OVER_SETTLE_SECONDS = 2.5
-WICKET_CARD_WAIT_SECONDS = 1.2
+POLL_SECONDS = 0.35
+OVER_SETTLE_SECONDS = 0.6
+WICKET_CARD_WAIT_SECONDS = 0.45
 PAGE_LOAD_TIMEOUT_MS = 45_000
 RELOAD_AFTER_FAILURES = 5
-TTS_TIMEOUT_SECONDS = 25
+TTS_TIMEOUT_SECONDS = 8
 VOICE_NAME = "hi-IN-MadhurNeural"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
