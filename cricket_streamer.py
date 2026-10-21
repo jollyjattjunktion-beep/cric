@@ -196,98 +196,163 @@ class CrexParser:
         return await asyncio.to_thread(self.fetch_html)
 
     async def fetch_ball_feeds_async(self, session: Optional[aiohttp.ClientSession] = None) -> List[Dict[str, Any]]:
-        """Fallback to CREX's own JSON ball-feed endpoint when HTML has no commentary cards.
+        """Read CREX's own commentary feed using the same request shapes as its web client.
 
-        The endpoint is the same content feed used by CREX's frontend. Only entries with
-        real source commentary text are returned; this method never fabricates commentary.
+        Tries the current v2 endpoint first (no static auth token), then the legacy v1
+        request if needed. Only actual source commentary is returned; never invent text.
         """
         match_match = re.search(r"-match-updates-([^/?#]+)", self.url, flags=re.IGNORECASE)
-        if not match_match:
-            logger.debug("Cannot derive a CREX match key from URL: %s", self.url)
+        if match_match:
+            match_key = match_match.group(1).strip()
+        else:
+            # Some valid CREX routes are supplied without the "-match-updates-" portion.
+            path = self.url.split("?", 1)[0].rstrip("/")
+            match_key = path.rsplit("-", 1)[-1].strip()
+        if not match_key:
+            logger.warning("Unable to derive CREX match key from URL: %s", self.url)
             return []
-        match_key = match_match.group(1).strip()
-        endpoint = "https://content.crickapi.com/commentary/v2/getBallFeeds"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+
+        common_headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124.0.0.0 Safari/537.36",
             "Origin": "https://crex.com",
             "Referer": self.url,
             "Accept": "application/json, text/plain, */*",
             "Content-Type": "application/json",
-            # CREX's own browser client includes these headers on its ball-feed request.
-            "authorization": (
-                "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCIsImV4cGlyZXNJbiI6IjM2NWQifQ."
-                "eyJ0aW1lIjoxNjYwMDQ2NjIwMDAwfQ."
-                "bTEmMWlR7hLRUHxPPq6-1TP7cuuW7m6sZ9jcdbYzLRA"
-            ),
-            "cc": "IN",
-            "version": "96.0.0",
         }
-        payload = {"matchKey": match_key, "lastDocId": None, "filters": {}, "lang": "en"}
+        attempts = [
+            (
+                "v2",
+                "https://content.crickapi.com/commentary/v2/getBallFeeds",
+                {"matchKey": match_key, "lastDocId": None, "filters": {}},
+            ),
+            (
+                "v1",
+                "https://content.crickapi.com/commentary/v1/getBallFeeds",
+                {"mfkey": match_key, "sh": 1, "inning": 1, "nt": 0},
+            ),
+        ]
 
-        try:
-            if session and not session.closed:
-                async with session.post(
-                    endpoint, headers=headers, json=payload,
-                    timeout=aiohttp.ClientTimeout(total=6.0)
-                ) as response:
-                    if response.status != 200:
-                        logger.debug("CREX commentary API returned HTTP %s", response.status)
-                        return []
-                    data = await response.json(content_type=None)
-            else:
-                timeout = aiohttp.ClientTimeout(total=6.0)
-                async with aiohttp.ClientSession(timeout=timeout) as client:
-                    async with client.post(endpoint, headers=headers, json=payload) as response:
-                        if response.status != 200:
-                            logger.debug("CREX commentary API returned HTTP %s", response.status)
-                            return []
-                        data = await response.json(content_type=None)
-        except Exception as exc:
-            logger.debug("CREX commentary API fallback failed: %s", exc)
+        def extract_items(data):
+            """Accept array responses or nested API wrappers."""
+            if isinstance(data, list):
+                if any(isinstance(x, dict) and
+                       any(k in x for k in ("c2", "commentary", "description", "balltext"))
+                       for x in data):
+                    return data
+                for child in data:
+                    found = extract_items(child)
+                    if found:
+                        return found
+            elif isinstance(data, dict):
+                for key in ("data", "balls", "items", "feeds", "ballFeeds", "result", "response"):
+                    if key in data:
+                        found = extract_items(data[key])
+                        if found:
+                            return found
+                for child in data.values():
+                    found = extract_items(child)
+                    if found:
+                        return found
             return []
 
-        if isinstance(data, list):
-            source_items = data
-        elif isinstance(data, dict):
-            source_items = data.get("data") or data.get("balls") or data.get("items") or []
-        else:
-            source_items = []
+        for version, endpoint, payload in attempts:
+            try:
+                timeout = aiohttp.ClientTimeout(total=7.0)
+                if session and not session.closed:
+                    async with session.post(
+                        endpoint, headers=common_headers, json=payload, timeout=timeout
+                    ) as response:
+                        status_code = response.status
+                        body_text = await response.text()
+                else:
+                    async with aiohttp.ClientSession(timeout=timeout) as client:
+                        async with client.post(
+                            endpoint, headers=common_headers, json=payload
+                        ) as response:
+                            status_code = response.status
+                            body_text = await response.text()
 
-        balls: List[Dict[str, Any]] = []
-        seen = set()
-        for item in source_items:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("type", "")).lower() != "b":
-                continue
+                if status_code != 200:
+                    logger.warning(
+                        "CREX commentary %s endpoint returned HTTP %s for match key %s; body=%s",
+                        version, status_code, match_key, body_text[:180].replace("\\n", " ")
+                    )
+                    continue
 
-            over_value = str(item.get("o", item.get("over", "")) or "").strip()
-            runs_value = str(item.get("b", item.get("runs", "")) or "").strip().upper()
-            matchup = re.sub(r"\s+", " ", str(item.get("c1", item.get("matchup", "")) or "")).strip()
-            raw_text = str(item.get("c2", item.get("commentary", item.get("description", ""))) or "")
-            decoded = raw_text.replace("&l;", "<").replace("&g;", ">").replace("&q;", '"').replace("&a;", "&")
-            decoded = html.unescape(decoded)
-            commentary = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", decoded)).strip()
+                try:
+                    data = json.loads(body_text)
+                except Exception:
+                    logger.warning(
+                        "CREX commentary %s endpoint returned non-JSON for match key %s; body=%s",
+                        version, match_key, body_text[:180].replace("\\n", " ")
+                    )
+                    continue
 
-            # Speak only genuine text published for a delivery. A score badge alone isn't commentary.
-            if not commentary or not over_value:
-                continue
-            identity = (over_value, runs_value, matchup, commentary)
-            if identity in seen:
-                continue
-            seen.add(identity)
-            spoken_line = f"Over {over_value}: {matchup}. {commentary}" if matchup else f"Over {over_value}: {commentary}"
-            balls.append({
-                "over": over_value,
-                "matchup": matchup,
-                "runs": runs_value,
-                "commentary": commentary,
-                "spoken_line": spoken_line,
-            })
+                source_items = extract_items(data)
+                balls: List[Dict[str, Any]] = []
+                seen = set()
+                for item in source_items:
+                    if not isinstance(item, dict):
+                        continue
+                    event_type = str(item.get("type", "b")).strip().lower()
+                    if event_type not in ("b", "ball", "delivery"):
+                        continue
 
-        if balls:
-            logger.info("CREX JSON commentary fallback returned %d deliveries for match key %s", len(balls), match_key)
-        return balls
+                    over_value = str(item.get("o", item.get("over", "")) or "").strip()
+                    runs_value = str(item.get("b", item.get("runs", "")) or "").strip().upper()
+                    matchup = re.sub(
+                        r"\s+", " ",
+                        str(item.get("c1", item.get("matchup", item.get("bowlerBatter", ""))) or "")
+                    ).strip()
+                    raw_text = str(
+                        item.get("c2", item.get("commentary", item.get("description", item.get("c", "")))) or ""
+                    )
+                    decoded = raw_text.replace("&l;", "<").replace("&g;", ">").replace("&q;", '"').replace("&a;", "&")
+                    decoded = html.unescape(decoded)
+                    commentary = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", decoded)).strip()
+
+                    if not commentary:
+                        continue
+                    if not over_value:
+                        on = item.get("on")
+                        if isinstance(on, int) and on >= 0:
+                            over_value = f"{on // 6}.{on % 6 + 1}"
+                    if not over_value:
+                        continue
+
+                    identity = (over_value, runs_value, matchup, commentary)
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    spoken_line = (
+                        f"Over {over_value}: {matchup}. {commentary}"
+                        if matchup else f"Over {over_value}: {commentary}"
+                    )
+                    balls.append({
+                        "over": over_value,
+                        "matchup": matchup,
+                        "runs": runs_value,
+                        "commentary": commentary,
+                        "spoken_line": spoken_line,
+                    })
+
+                if balls:
+                    logger.info(
+                        "CREX commentary %s endpoint returned %d deliveries for key %s; latest=%s",
+                        version, len(balls), match_key, balls[-1].get("over")
+                    )
+                    return balls
+
+                logger.warning(
+                    "CREX commentary %s endpoint returned HTTP 200 but no delivery text for key %s "
+                    "(response type=%s, top-level count=%s)",
+                    version, match_key, type(data).__name__,
+                    len(data) if isinstance(data, (list, dict)) else "n/a"
+                )
+            except Exception as exc:
+                logger.warning("CREX commentary %s request failed for key %s: %s", version, match_key, exc)
+
+        return []
 
     def fetch_html(self) -> str:
         try:
