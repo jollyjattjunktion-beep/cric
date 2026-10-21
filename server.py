@@ -303,14 +303,9 @@ def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str) 
         wickets += w
 
     spoken_over = over_index + 1
-    if lang == "hinglish":
-        return (f"Over {spoken_over} complete! Is over mein {runs} runs aaye — "
+    if lang in ("hinglish", "hi"):
+        return (f"Over {spoken_over} complete! Is over mein {runs} runs aaye, "
                 f"{fours} fours, {sixes} sixes aur {wickets} wickets.")
-    if lang == "hi":
-        four_word = "चौका" if fours == 1 else "चौके"
-        six_word = "छक्का" if sixes == 1 else "छक्के"
-        return (f"ओवर {spoken_over} पूरा हुआ। इस ओवर में {runs} रन, "
-                f"{fours} {four_word}, {sixes} {six_word} और {wickets} विकेट।")
     four_word = "four" if fours == 1 else "fours"
     six_word = "six" if sixes == 1 else "sixes"
     wicket_word = "wicket" if wickets == 1 else "wickets"
@@ -609,7 +604,17 @@ class BroadcastHub:
                     # New source delivery arrived while a TTS call was running.
                     # Drop this old ball; the next queue item carries the newest one.
                     if current_event["version"] != latest_event_version:
-                        logger.info("Dropping stale synthesized delivery %s", current_event.get("ball", {}).get("over"))
+                        # A recap attached to a stale queue item must not be re-attached
+                        # and announced over and over on every following delivery.
+                        for summary in summaries_after_ball:
+                            over_id = summary.get("id")
+                            if over_id:
+                                announced_over_ids.add(over_id)
+                                pending_over_announcements.pop(over_id, None)
+                        logger.info(
+                            "Dropping stale delivery %s and marking its attached over recaps handled",
+                            current_event.get("ball", {}).get("over"),
+                        )
                         continue
 
                     ball = current_event["ball"]
@@ -772,9 +777,15 @@ class BroadcastHub:
                             )
                             if next_ball_task in recap_done:
                                 event = next_ball_task.result()
+                                # Drop this recap once interrupted by a newer live ball.
+                                # Keeping it pending caused the same old-over sentence to
+                                # be attached to every later ball and repeated indefinitely.
+                                announced_over_ids.add(over_id)
+                                pending_over_announcements.pop(over_id, None)
                                 if not recap_task.done():
                                     recap_task.cancel()
                                 await asyncio.gather(recap_task, return_exceptions=True)
+                                logger.info("Skipping interrupted over recap %s; it will not repeat", over_id)
                                 break
                             if recap_task not in recap_done:
                                 if not recap_task.done():
@@ -782,23 +793,30 @@ class BroadcastHub:
                                 if not next_ball_task.done():
                                     next_ball_task.cancel()
                                 await asyncio.gather(recap_task, next_ball_task, return_exceptions=True)
-                                logger.warning("Over recap timed out; keep it pending for a later quiet period")
+                                announced_over_ids.add(over_id)
+                                pending_over_announcements.pop(over_id, None)
+                                logger.warning("Over recap timed out; marking it handled so it cannot repeat")
                                 continue
                             if not next_ball_task.done():
                                 next_ball_task.cancel()
                                 await asyncio.gather(next_ball_task, return_exceptions=True)
 
                             recap_mp3 = recap_task.result()
-                            if current_event["version"] != latest_event_version:
+                            if current_event["version"] != latest_event_version or not recap_mp3:
+                                announced_over_ids.add(over_id)
+                                pending_over_announcements.pop(over_id, None)
                                 event = None
                                 break
+
+                            # Claim this over before broadcasting so copied queue events
+                            # cannot trigger a duplicate recap.
+                            announced_over_ids.add(over_id)
+                            pending_over_announcements.pop(over_id, None)
                             recap_duration = await broadcast_audio_bytes(
                                 summary["text"], "OVER COMPLETE", recap_mp3, "over_summary"
                             )
                             if recap_duration is None:
                                 continue
-                            announced_over_ids.add(over_id)
-                            pending_over_announcements.pop(over_id, None)
                             try:
                                 event = await asyncio.wait_for(ball_queue.get(), timeout=recap_duration)
                             except asyncio.TimeoutError:
@@ -1141,7 +1159,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-12",
+        "server_build": "circle-radio-20261021-13",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
