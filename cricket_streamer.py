@@ -661,7 +661,8 @@ class CrexParser:
             for item in feed_items:
                 lower_item = {str(k).lower(): v for k, v in item.items()}
                 o_val = str(lower_item.get("o", lower_item.get("over", lower_item.get("overno", "Live")))).strip()
-                r_val = str(lower_item.get("b", lower_item.get("runs", lower_item.get("ball", "0")))).strip().upper()
+                raw_r_val = lower_item.get("b", lower_item.get("runs", lower_item.get("ball", "0")))
+                r_val = "" if raw_r_val is None else str(raw_r_val).strip().upper()
                 m_val = str(lower_item.get("c1", lower_item.get("matchup", lower_item.get("bowlerbatter", ""))) or "").strip()
                 c2_raw = str(lower_item.get("c2", lower_item.get("commentary", lower_item.get("description", lower_item.get("comment", "")))) or "").strip()
                 c2_decoded = c2_raw.replace("&l;", "<").replace("&g;", ">").replace("&q;", '"').replace("&a;", "&")
