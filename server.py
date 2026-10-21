@@ -142,7 +142,8 @@ def _extract_crex_state_balls(html_text):
                     commentary = _clean_crex_text(
                         item.get("c2", item.get("commentary", item.get("description", item.get("c", ""))))
                     )
-                    if not commentary:
+                    # The delivery-circle value alone is sufficient for radio speech.
+                    if not commentary and not run_token:
                         continue
                     if not over:
                         on = item.get("on")
@@ -158,6 +159,8 @@ def _extract_crex_state_balls(html_text):
                     output.append({
                         "over": over,
                         "matchup": matchup,
+                        "circle_val": run_token,
+                        "circle_val": run_token,
                         "runs": run_token,
                         "commentary": commentary,
                         "spoken_line": spoken,
@@ -206,7 +209,7 @@ def _ball_identity(ball: Dict[str, Any]) -> str:
     """Stable delivery identity that doesn't change if CREX refreshes the commentary wording."""
     over = _normal_space(ball.get("over")).lower()
     matchup = _normal_space(ball.get("matchup")).lower()
-    runs = _normal_space(ball.get("runs")).upper()
+    runs = _normal_space(ball.get("circle_val", ball.get("runs"))).upper()
     if not over or over.lower() == "live":
         text = _normal_space(ball.get("commentary"))[:100].lower()
         return f"{over}|{matchup}|{runs}|{text}"
@@ -269,7 +272,7 @@ def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str) 
 
 
 def _source_badge(ball: Dict[str, Any]) -> str:
-    token = _normal_space(ball.get("runs")).upper().replace(" ", "")
+    token = _normal_space(ball.get("circle_val", ball.get("runs"))).upper().replace(" ", "")
     if token in {"W", "WKT", "OUT"} or "WICKET" in token:
         return "WICKET"
     if token == "6":
@@ -553,7 +556,7 @@ class BroadcastHub:
                     ball = current_event["ball"]
                     ball_over = _normal_space(ball.get("over")) or "Live"
                     source_text = _normal_space(ball.get("commentary"))
-                    circle_token = _normal_space(ball.get("runs"))
+                    circle_token = _normal_space(ball.get("circle_val", ball.get("runs", ""))).upper()
                     if not source_text and not circle_token:
                         logger.info("Skipping delivery %s because CREX has no circle value or commentary text", ball_over)
                         continue
@@ -563,11 +566,13 @@ class BroadcastHub:
                     metadata = commentator.humanize(
                         source_text,
                         ball_info={**current_event["fresh_data"], **ball,
-                                   "runs": ball.get("runs", ""), "over": ball_over},
+                                   "circle_val": circle_token, "runs": circle_token, "over": ball_over},
                         lang=lang
                     )
                     metadata = metadata or {}
-                    radio_text = _normal_space(metadata.get("spoken_text") or source_text)
+                    # Never read CREX's commentary paragraph aloud. Manual radio text must
+                    # exist even if the page has not returned any c2/source paragraph.
+                    radio_text = _normal_space(metadata.get("spoken_text") or f"Live ball {ball_over}.")
                     badge = metadata.get("badge") or _source_badge(ball)
                     rate = metadata.get("rate") or "+15%"
                     pitch = metadata.get("pitch") or "+10Hz"
@@ -584,6 +589,13 @@ class BroadcastHub:
                         "rate": rate,
                         "pitch": pitch,
                         "radio_text_preview": radio_text[:180],
+                        "circle_value": circle_token,
+                        "active_striker": current_event["fresh_data"].get("striker"),
+                        "active_striker_score": current_event["fresh_data"].get("striker_runs"),
+                        "active_striker_balls": current_event["fresh_data"].get("striker_balls"),
+                        "active_non_striker": current_event["fresh_data"].get("non_striker"),
+                        "active_non_striker_score": current_event["fresh_data"].get("non_striker_runs"),
+                        "active_non_striker_balls": current_event["fresh_data"].get("non_striker_balls"),
                     }
                     # Race TTS synthesis against the next delivery. If the match updates
                     # first, cancel old synthesis immediately instead of making the newest ball
