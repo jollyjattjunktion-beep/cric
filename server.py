@@ -211,7 +211,7 @@ def _ball_identity(ball: Dict[str, Any]) -> str:
     """Stable delivery identity that doesn't change if CREX refreshes the commentary wording."""
     over = _normal_space(ball.get("over")).lower()
     matchup = _normal_space(ball.get("matchup")).lower()
-    runs = _normal_space(ball.get("circle_val", ball.get("runs"))).upper()
+    runs = _normal_space((ball.get("circle_val") or ball.get("runs"))).upper()
     if not over or over.lower() == "live":
         text = _normal_space(ball.get("commentary"))[:100].lower()
         return f"{over}|{matchup}|{runs}|{text}"
@@ -240,7 +240,7 @@ def _merge_ball_sources(*sources: list[Dict[str, Any]]) -> list[Dict[str, Any]]:
             for key, value in ball.items():
                 if value is not None and value != "":
                     existing[key] = value
-            token = _normal_space(ball.get("circle_val", ball.get("runs", ""))).upper()
+            token = _normal_space((ball.get("circle_val") or ball.get("runs", ""))).upper()
             if token:
                 existing["circle_val"] = token
                 existing["runs"] = token
@@ -256,7 +256,7 @@ def _ball_identity(ball: Dict[str, Any]) -> str:
     """Stable delivery identity that doesn't change if CREX refreshes the commentary wording."""
     over = _normal_space(ball.get("over")).lower()
     matchup = _normal_space(ball.get("matchup")).lower()
-    runs = _normal_space(ball.get("circle_val", ball.get("runs"))).upper()
+    runs = _normal_space((ball.get("circle_val") or ball.get("runs"))).upper()
     if not over or over.lower() == "live":
         text = _normal_space(ball.get("commentary"))[:100].lower()
         return f"{over}|{matchup}|{runs}|{text}"
@@ -295,7 +295,7 @@ def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str) 
 
     runs = fours = sixes = wickets = legal = 0
     for ball in rows:
-        n, is_legal, f, s, w = _delivery_stats(ball.get("circle_val", ball.get("runs")))
+        n, is_legal, f, s, w = _delivery_stats((ball.get("circle_val") or ball.get("runs")))
         runs += n
         legal += int(is_legal)
         fours += f
@@ -319,7 +319,7 @@ def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str) 
 
 
 def _source_badge(ball: Dict[str, Any]) -> str:
-    token = _normal_space(ball.get("circle_val", ball.get("runs"))).upper().replace(" ", "")
+    token = _normal_space((ball.get("circle_val") or ball.get("runs"))).upper().replace(" ", "")
     if token in {"W", "WKT", "OUT"} or "WICKET" in token:
         return "WICKET"
     if token == "6":
@@ -603,7 +603,7 @@ class BroadcastHub:
                     ball = current_event["ball"]
                     ball_over = _normal_space(ball.get("over")) or "Live"
                     source_text = _normal_space(ball.get("commentary"))
-                    circle_token = _normal_space(ball.get("circle_val", ball.get("runs", ""))).upper()
+                    circle_token = _normal_space((ball.get("circle_val") or ball.get("runs", ""))).upper()
                     if not source_text and not circle_token:
                         logger.info("Skipping delivery %s because CREX has no circle value or commentary text", ball_over)
                         continue
@@ -754,20 +754,27 @@ class BroadcastHub:
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
-                    self.latest_tts_debug = {
-                        **self.latest_tts_debug,
-                        "status": "error",
-                        "error": str(exc)[:240],
-                    }
+                    is_current_failure = (
+                        isinstance(locals().get("current_event"), dict)
+                        and current_event.get("version") == latest_event_version
+                    )
+                    if is_current_failure:
+                        self.latest_tts_debug = {
+                            **self.latest_tts_debug,
+                            "status": "error",
+                            "error": str(exc)[:240],
+                        }
+                        try:
+                            await self.broadcast_ws("tts_error", {
+                                "message": str(exc)[:180],
+                                "over": self.latest_tts_debug.get("over"),
+                                "circle_value": self.latest_tts_debug.get("circle_value"),
+                            })
+                        except Exception:
+                            pass
+                    else:
+                        logger.warning("Ignoring TTS error from stale ball: %s", str(exc)[:180])
                     logger.exception("Voice worker error")
-                    try:
-                        await self.broadcast_ws("tts_error", {
-                            "message": str(exc)[:180],
-                            "over": self.latest_tts_debug.get("over"),
-                            "circle_value": self.latest_tts_debug.get("circle_value"),
-                        })
-                    except Exception:
-                        pass
                     event = None
 
         voice_task = asyncio.create_task(voice_worker(), name="current_ball_voice_worker")
@@ -874,7 +881,7 @@ class BroadcastHub:
                                 seen_feed_keys.add(latest_key)
                                 await self.broadcast_ws("feed_item", {
                                     "over": _normal_space(latest_ball.get("over")),
-                                    "runs": _normal_space(latest_ball.get("circle_val", latest_ball.get("runs"))),
+                                    "runs": _normal_space((latest_ball.get("circle_val") or latest_ball.get("runs"))),
                                     "matchup": _normal_space(latest_ball.get("matchup")),
                                     "badge": _source_badge(latest_ball),
                                     "commentary": _normal_space(latest_ball.get("commentary")),
@@ -906,7 +913,7 @@ class BroadcastHub:
                                     tracked_full_overs.add(candidate_over)
                                 await self.broadcast_ws("feed_item", {
                                     "over": _normal_space(candidate.get("over")),
-                                    "runs": _normal_space(candidate.get("circle_val", candidate.get("runs"))),
+                                    "runs": _normal_space((candidate.get("circle_val") or candidate.get("runs"))),
                                     "matchup": _normal_space(candidate.get("matchup")),
                                     "badge": _source_badge(candidate),
                                     "commentary": _normal_space(candidate.get("commentary")),
@@ -1085,7 +1092,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-8",
+        "server_build": "circle-radio-20261021-9",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
