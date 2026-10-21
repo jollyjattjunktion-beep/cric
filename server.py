@@ -540,22 +540,11 @@ class BroadcastHub:
 
                 current_event, event = event, None
                 try:
-                    # A completed-over announcement is sticky until spoken, even if the next
-                    # ball replaces the waiting queue item. This prevents summaries vanishing.
-                    for summary in current_event.get("over_announcements", []):
-                        over_id = summary["id"]
-                        if over_id in announced_over_ids:
-                            continue
-                        duration = await broadcast_audio(
-                            summary["text"], "OVER COMPLETE", "+5%", "+0Hz", "over_summary"
-                        )
-                        if duration is not None:
-                            announced_over_ids.add(over_id)
-                            pending_over_announcements.pop(over_id, None)
-                            # Allow the browser player to finish the summary before the next ball.
-                            await asyncio.sleep(duration)
+                    # Keep summaries attached to the event, but never speak one before its ball.
+                    # A recap must not make a fresh delivery wait or cause it to be discarded.
+                    summaries_after_ball = current_event.get("over_announcements", [])
 
-                    # New source delivery arrived while a summary/TTS call was running.
+                    # New source delivery arrived while a TTS call was running.
                     # Drop this old ball; the next queue item carries the newest one.
                     if current_event["version"] != latest_event_version:
                         logger.info("Dropping stale synthesized delivery %s", current_event.get("ball", {}).get("over"))
@@ -564,8 +553,9 @@ class BroadcastHub:
                     ball = current_event["ball"]
                     ball_over = _normal_space(ball.get("over")) or "Live"
                     source_text = _normal_space(ball.get("commentary"))
-                    if not source_text:
-                        logger.info("Skipping delivery %s because CREX has no source commentary text yet", ball_over)
+                    circle_token = _normal_space(ball.get("runs"))
+                    if not source_text and not circle_token:
+                        logger.info("Skipping delivery %s because CREX has no circle value or commentary text", ball_over)
                         continue
 
                     # The visual feed keeps the original CREX text. The speaker uses a short,
@@ -682,6 +672,32 @@ class BroadcastHub:
                         event = await asyncio.wait_for(ball_queue.get(), timeout=duration)
                     except asyncio.TimeoutError:
                         event = None
+
+                    # Only attempt an over recap after the current delivery has been
+                    # sent and its short clip has had time to play. If a new ball arrived,
+                    # keep it first and leave the recap for a later quiet period.
+                    if event is None and summaries_after_ball:
+                        for summary in summaries_after_ball:
+                            if current_event["version"] != latest_event_version:
+                                break
+                            over_id = summary["id"]
+                            if over_id in announced_over_ids:
+                                continue
+                            recap_duration = await broadcast_audio(
+                                summary["text"], "OVER COMPLETE", "+5%", "+0Hz", "over_summary"
+                            )
+                            if recap_duration is None:
+                                continue
+                            announced_over_ids.add(over_id)
+                            pending_over_announcements.pop(over_id, None)
+                            # Let the recap play unless a live ball arrives, in which case
+                            # the next iteration immediately prioritizes that ball.
+                            try:
+                                event = await asyncio.wait_for(ball_queue.get(), timeout=recap_duration)
+                            except asyncio.TimeoutError:
+                                event = None
+                            if event is not None:
+                                break
 
                 except asyncio.CancelledError:
                     raise
