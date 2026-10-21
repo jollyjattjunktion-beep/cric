@@ -208,7 +208,7 @@ class CrexParser:
         now = time.monotonic()
         if now < self._feed_retry_after:
             return list(self._feed_cache)
-        self._feed_retry_after = now + 3.0
+        self._feed_retry_after = now + 0.8
 
         match_match = re.search(r"-match-updates-([^/?#]+)", self.url, flags=re.IGNORECASE)
         if match_match:
@@ -248,9 +248,12 @@ class CrexParser:
         def extract_items(data):
             """Accept array responses or nested API wrappers."""
             if isinstance(data, list):
-                if any(isinstance(x, dict) and
-                       any(k in x for k in ("c2", "c", "commentary", "description", "balltext", "text"))
-                       for x in data):
+                if any(
+                    isinstance(x, dict)
+                    and any(k in x for k in ("o", "over", "overNo", "overno"))
+                    and any(k in x for k in ("b", "runs", "ball", "c2", "c", "commentary", "description", "balltext", "text"))
+                    for x in data
+                ):
                     return data
                 for child in data:
                     found = extract_items(child)
@@ -323,7 +326,8 @@ class CrexParser:
                         continue
 
                     over_value = str(item.get("o", item.get("over", "")) or "").strip()
-                    runs_value = str(item.get("b", item.get("runs", "")) or "").strip().upper()
+                    raw_runs_value = item.get("b", item.get("runs", item.get("ball", "")))
+                    runs_value = "" if raw_runs_value is None else str(raw_runs_value).strip().upper()
                     matchup = re.sub(
                         r"\s+", " ",
                         str(item.get("c1", item.get("matchup", item.get("bowlerBatter", ""))) or "")
@@ -619,11 +623,12 @@ class CrexParser:
 
             over_str = over_span.get_text(strip=True)
             matchup_str = c1_span.get_text(" ", strip=True) if c1_span else ""
-            runs_str = ball_span.get_text(" ", strip=True) if ball_span else "0"
+            runs_str = ball_span.get_text(" ", strip=True) if ball_span else ""
             commentary_str = c2_span.get_text(" ", strip=True) if c2_span else ""
             commentary_clean = re.sub(r"\s+", " ", commentary_str).strip()
 
-            if commentary_clean and re.fullmatch(r"\d{1,2}\.\d{1,2}", over_str):
+            # Keep a real delivery even if the optional CREX paragraph arrives late.
+            if (commentary_clean or runs_str) and re.fullmatch(r"\d{1,2}\.\d{1,2}", over_str):
                 full_spoken_line = (
                     f"Over {over_str}: {matchup_str}. {commentary_clean}"
                     if matchup_str else f"Over {over_str}. {commentary_clean}"
@@ -631,7 +636,8 @@ class CrexParser:
                 balls_data.append({
                     "over": over_str,
                     "matchup": matchup_str,
-                    "runs": runs_str,
+                    "circle_val": runs_str.upper(),
+                    "runs": runs_str.upper(),
                     "commentary": commentary_clean,
                     "spoken_line": full_spoken_line,
                 })
