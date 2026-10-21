@@ -16,6 +16,7 @@ numpy==2.4.6
 pillow==12.3.0
 propcache==0.5.4
 pydub==0.25.1
+playwright==1.63.0
 requests==2.34.2
 soupsieve==2.9.2
 tabulate==0.10.0
