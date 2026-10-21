@@ -476,15 +476,17 @@
       }
     } catch (_) {}
 
+    // Always send start attempts to the server so it can report the exact phase/reason.
+    // Otherwise client-side validation leaves /api/status stuck at start_debug=not_started.
     if (!url) {
-      showAlert("Please enter any match link (CREX, Cricbuzz, Cricinfo), team names (e.g. AUS vs ZIM), or pick an active match above.");
-      return;
+      showAlert("No match URL is entered. Sending a diagnostic request to the server.");
     }
-
     if (ttsProvider === "sarvam" && !sarvamApiKey) {
-      showAlert("Please paste your Sarvam API key to use the Sarvam voice engine.");
-      return;
+      showAlert("Sarvam API key is missing. Sending the request so the server can record the reason.");
     }
+    console.info("[Preet Sports] Start button clicked; sending /api/start", {
+      hasUrl: Boolean(url), lang, ttsProvider
+    });
 
     try {
       if (ttsProvider === "sarvam" && sarvamApiKey) {
@@ -514,6 +516,7 @@
     try {
       const resp = await fetch("/api/start", {
         method: "POST",
+        cache: "no-store",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           url,
@@ -525,13 +528,16 @@
         }),
       });
       const res = await resp.json();
+      console.info("[Preet Sports] /api/start response", resp.status, res);
       if (!res.ok) {
+        playerStateText.textContent = "Start rejected by server (HTTP " + resp.status + "): " + (res.error || "Unknown error");
         showAlert("Cannot start broadcast: " + (res.error || "Match feed not found."));
         btnStart.disabled = false;
         statusText.textContent = "IDLE";
         resetStudioToIdle();
       } else {
         hideAlert();
+        playerStateText.textContent = "Start request accepted; waiting for live feed…";
         if (res.resolved_url) {
           matchUrlInput.value = res.resolved_url;
         }
