@@ -446,10 +446,20 @@ class BroadcastHub:
                             continue
 
                         fresh_data = parser.parse(html_text)
+                        raw_balls = fresh_data.get("balls") or []
+
+                        # If this CREX page renders the scorecard but not commentary HTML,
+                        # ask the same JSON feed used by CREX's frontend. Still speak only its text.
+                        if not raw_balls:
+                            feed_balls = await parser.fetch_ball_feeds_async(session=session)
+                            if feed_balls:
+                                raw_balls = feed_balls
+                                fresh_data["balls"] = feed_balls
+                                fresh_data["paragraphs"] = [b.get("spoken_line", "") for b in feed_balls]
+
                         self.latest_match_state = fresh_data
                         await self.broadcast_ws("match_state", fresh_data)
 
-                        raw_balls = fresh_data.get("balls") or []
                         latest_ball = _latest_source_ball(raw_balls)
 
                         # Keep the visual ball-by-ball feed useful even when speech skips stale

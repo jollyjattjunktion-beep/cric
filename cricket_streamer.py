@@ -195,6 +195,92 @@ class CrexParser:
             logger.debug(f"Async fetch error ({e}), falling back to curl")
         return await asyncio.to_thread(self.fetch_html)
 
+    async def fetch_ball_feeds_async(self, session: Optional[aiohttp.ClientSession] = None) -> List[Dict[str, Any]]:
+        """Fallback to CREX's own JSON ball-feed endpoint when HTML has no commentary cards.
+
+        The endpoint is the same content feed used by CREX's frontend. Only entries with
+        real source commentary text are returned; this method never fabricates commentary.
+        """
+        match_match = re.search(r"-match-updates-([^/?#]+)", self.url, flags=re.IGNORECASE)
+        if not match_match:
+            logger.debug("Cannot derive a CREX match key from URL: %s", self.url)
+            return []
+        match_key = match_match.group(1).strip()
+        endpoint = "https://content.crickapi.com/commentary/v2/getBallFeeds"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            "Origin": "https://crex.com",
+            "Referer": self.url,
+            "Accept": "application/json, text/plain, */*",
+            "Content-Type": "application/json",
+        }
+        payload = {"matchKey": match_key, "lastDocId": None, "filters": {}}
+
+        try:
+            if session and not session.closed:
+                async with session.post(
+                    endpoint, headers=headers, json=payload,
+                    timeout=aiohttp.ClientTimeout(total=6.0)
+                ) as response:
+                    if response.status != 200:
+                        logger.debug("CREX commentary API returned HTTP %s", response.status)
+                        return []
+                    data = await response.json(content_type=None)
+            else:
+                timeout = aiohttp.ClientTimeout(total=6.0)
+                async with aiohttp.ClientSession(timeout=timeout) as client:
+                    async with client.post(endpoint, headers=headers, json=payload) as response:
+                        if response.status != 200:
+                            logger.debug("CREX commentary API returned HTTP %s", response.status)
+                            return []
+                        data = await response.json(content_type=None)
+        except Exception as exc:
+            logger.debug("CREX commentary API fallback failed: %s", exc)
+            return []
+
+        if isinstance(data, list):
+            source_items = data
+        elif isinstance(data, dict):
+            source_items = data.get("data") or data.get("balls") or data.get("items") or []
+        else:
+            source_items = []
+
+        balls: List[Dict[str, Any]] = []
+        seen = set()
+        for item in source_items:
+            if not isinstance(item, dict):
+                continue
+            if str(item.get("type", "")).lower() != "b":
+                continue
+
+            over_value = str(item.get("o", item.get("over", "")) or "").strip()
+            runs_value = str(item.get("b", item.get("runs", "")) or "").strip().upper()
+            matchup = re.sub(r"\s+", " ", str(item.get("c1", item.get("matchup", "")) or "")).strip()
+            raw_text = str(item.get("c2", item.get("commentary", item.get("description", ""))) or "")
+            decoded = raw_text.replace("&l;", "<").replace("&g;", ">").replace("&q;", '"').replace("&a;", "&")
+            decoded = html.unescape(decoded)
+            commentary = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", decoded)).strip()
+
+            # Speak only genuine text published for a delivery. A score badge alone isn't commentary.
+            if not commentary or not over_value:
+                continue
+            identity = (over_value, runs_value, matchup, commentary)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            spoken_line = f"Over {over_value}: {matchup}. {commentary}" if matchup else f"Over {over_value}: {commentary}"
+            balls.append({
+                "over": over_value,
+                "matchup": matchup,
+                "runs": runs_value,
+                "commentary": commentary,
+                "spoken_line": spoken_line,
+            })
+
+        if balls:
+            logger.info("CREX JSON commentary fallback returned %d deliveries for match key %s", len(balls), match_key)
+        return balls
+
     def fetch_html(self) -> str:
         try:
             cmd = [
@@ -484,7 +570,7 @@ class CrexParser:
         ))
 
         if not balls_data:
-            logger.info(
+            logger.debug(
                 "CREX parsed scoreboard but no ball commentary in this HTML snapshot (URL=%s, payloads=%d, DOM over nodes=%d)",
                 self.url, len(script_payloads), len(over_nodes)
             )
