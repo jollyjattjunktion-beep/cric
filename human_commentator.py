@@ -76,10 +76,10 @@ def _active_batter_score(info: Dict[str, Any], lang: str) -> str:
     except (TypeError, ValueError):
         score = ""
     if lang == "hinglish":
-        return f"Live score {score}. Batters: {batting_line}." if score else f"Batters: {batting_line}."
+        return f"Score {score}: {batting_line}." if score else f"Batters: {batting_line}."
     if lang == "hi":
-        return f"स्कोर {score}। बल्लेबाज़: {batting_line}।" if score else f"बल्लेबाज़: {batting_line}।"
-    return f"Score {score}. Batters: {batting_line}." if score else f"Batters: {batting_line}."
+        return f"स्कोर {score। {batting_line}।" if score else f"बल्लेबाज़: {batting_line}।"
+    return f"Score {score}: {batting_line}." if score else f"Batters: {batting_line}."
 
 
 
@@ -340,7 +340,7 @@ class HumanCommentator:
 
         # Append the scorecard only when the circle records a scoring event or wicket;
         # dot balls stay short so speech can keep up with the live feed.
-        if event_info["event"] in {"runs", "four", "six", "wicket"}:
+        if event_info["event"] in {"runs", "four", "six", "wicket", "wide", "noball", "legbye", "bye"}:
             score_context = _active_batter_score(info, lang)
             if score_context:
                 spoken_text = f"{spoken_text} {score_context}"
