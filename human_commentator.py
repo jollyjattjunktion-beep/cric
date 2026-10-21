@@ -69,16 +69,17 @@ def _active_batter_score(info: Dict[str, Any], lang: str) -> str:
 
     if not players:
         return ""
-    batting_line = ", ".join(f"{name} {runs}({balls})" for _, name, runs, balls in players)
+    batting_line = ", ".join(
+        f"{name} {runs} off {balls} balls" for _, name, runs, balls in players
+    )
     team_runs, team_wickets = info.get("total_runs"), info.get("total_wickets")
     try:
-        score = f"{int(team_runs)}/{int(team_wickets)}"
+        # Say the score naturally instead of reading the slash aloud.
+        score = f"{int(team_runs)} for {int(team_wickets)}"
     except (TypeError, ValueError):
         score = ""
-    if lang == "hi":
-        return f"स्कोर {score}। {batting_line}।" if score else f"{batting_line}।"
-    return f"Score {score}. {batting_line}." if score else f"{batting_line}."
-    
+    # Keep score and batter figures in Hinglish even when the voice dropdown says Hindi.
+    return f"Score {score}. {batting_line}." if score else f"Batters: {batting_line}."
 
 def _wicket_type(source: str) -> str:
     text = (source or "").lower()
