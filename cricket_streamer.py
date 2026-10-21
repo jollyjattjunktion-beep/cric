@@ -334,7 +334,9 @@ class CrexParser:
                     decoded = html.unescape(decoded)
                     commentary = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", decoded)).strip()
 
-                    if not commentary:
+                    # The CREX circle token ("b") is enough to drive radio voice.
+                    # Keep the delivery even if its prose commentary hasn't loaded yet.
+                    if not commentary and not runs_value:
                         continue
                     if not over_value:
                         on = item.get("on")
@@ -354,7 +356,8 @@ class CrexParser:
                     balls.append({
                         "over": over_value,
                         "matchup": matchup,
-                        "runs": runs_value,
+                        "circle_val": runs_value,
+                        "runs": runs_value,  # backward compatibility for existing consumers
                         "commentary": commentary,
                         "spoken_line": spoken_line,
                     })
@@ -664,7 +667,8 @@ class CrexParser:
                     raw_c = html.unescape(raw_c.replace("&l;", "<").replace("&g;", ">").replace("&q;", '"').replace("&a;", "&"))
                     c2_clean = re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", raw_c)).strip()
 
-                if not c2_clean or len(c2_clean) < 4:
+                # Parse the delivery circle independently of its optional text paragraph.
+                if (not c2_clean or len(c2_clean) < 4) and not r_val:
                     continue
 
                 if o_val == "Live":
@@ -681,7 +685,8 @@ class CrexParser:
                 balls_data.append({
                     "over": o_val,
                     "matchup": m_val,
-                    "runs": r_val,
+                    "circle_val": r_val,
+                    "runs": r_val,  # backward compatibility for existing consumers
                     "commentary": c2_clean,
                     "spoken_line": spoken,
                 })
