@@ -898,9 +898,12 @@ class HumanCommentator:
             else:
                 spoken_text = f"Over {over_number}, ball {ball_number}. {spoken_text}"
 
-        # Append the scorecard only when the circle records a scoring event or wicket;
-        # dot balls stay short so speech can keep up with the live feed.
-        if event_info["event"] in {"runs", "four", "six", "wicket", "wide", "noball", "legbye", "bye"}:
+        # Only append the scorecard on a wicket or the sixth legal delivery.
+        is_over_end = bool(
+            ball_number == 6
+            and not any(k in token for k in ("wd", "wide", "nb", "noball", "no-ball"))
+        )
+        if event_info["event"] == "wicket" or is_over_end:
             score_context = _active_batter_score(info, lang)
             if score_context:
                 spoken_text = f"{spoken_text} {score_context}"
@@ -960,9 +963,19 @@ def build_live_circle_announcement(
         dismissal if isinstance(dismissal, dict) else None,
     )
 
-    # Say the live score in conversational Hinglish after scoring events.
+    # Score and batter figures are announced ONLY after a wicket or the final legal
+    # ball of an over. Routine singles, dots, boundaries and extras get only the
+    # short manual circle call so the voice can keep up.
+    over_match = re.search(r"(\d+)\.(\d+)", ball_num)
+    is_over_end = bool(
+        over_match
+        and int(over_match.group(2)) == 6
+        and d.get("legal", True)
+    )
+    announce_score = d["kind"] == "wicket" or is_over_end
+
     # Do not copy any scraped CREX commentary sentence into the voice text.
-    if d["kind"] in {"runs", "wide", "noball", "legbye", "bye", "wicket"}:
+    if announce_score:
         score_parts = []
         try:
             team_runs = int(info.get("total_runs"))
