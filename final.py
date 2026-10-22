@@ -1422,7 +1422,7 @@ def build_live_circle_announcement(ball_info, lang="hi"):
     event_kind = "four" if kind == "runs" and n == 4 else "six" if kind == "runs" and n == 6 else kind
     lang_key = str(lang or "hi").strip().lower()
 
-    if lang_key in {"hinglish", "hi-en", "hi_en"}:
+    if lang_key in {"hinglish", "hi-en", "hi_en", "hi", "hindi"}:
         phrase = _hinglish_ball_phrase(over_label)
         if kind == "wicket":
             card = dismissal or {}
