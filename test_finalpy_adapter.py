@@ -17,7 +17,7 @@ class FinalPyAdapterTests(unittest.TestCase):
         balls = [{"over": "0." + str(i + 1), "circle_val": token, "runs": token, "matchup": str(i)}
                  for i, token in enumerate(["1", "4", "0", "W", "6", "1"])]
         summary = build_live_over_summary(0, balls, {"total_runs": 61, "total_wickets": 3}, lang="hinglish")
-        self.assertIn("Over 1 complete", summary)
+        self.assertIn("Over एक complete", summary)
 
     def test_madhur_profiles_are_moderate(self):
         self.assertEqual(AUDIO_PROFILES[1], ("+3%", "+0Hz", "+0%"))

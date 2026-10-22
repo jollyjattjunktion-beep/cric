@@ -51,6 +51,16 @@ class HinglishCommentaryTests(unittest.TestCase):
         self.assertIn("सात दशमलव", summary)
         self.assertNotRegex(summary, r"(?<![A-Za-z])\d+(?:\.\d+)?")
 
+
+    def test_hindi_voice_selection_still_uses_hinglish_words(self):
+        result = build_live_circle_announcement({
+            "over": "0.1", "circle_val": "1", "runs": "1",
+            "bowler": "Bowler One", "batsman": "Batter One",
+            "matchup": "Bowler One to Batter One",
+        }, lang="hi")
+        self.assertTrue(result["spoken_text"].startswith("पहले over ki पहली ball"))
+        self.assertNotRegex(result["spoken_text"], r"(?<![A-Za-z])\\d+(?:\\.\\d+)?")
+
     def test_summary_uses_madhur_normal_rate_pitch(self):
         self.assertEqual(AUDIO_PROFILES[2], ("+5%", "+1Hz", "+5%"))
 
