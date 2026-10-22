@@ -737,15 +737,25 @@ class BroadcastHub:
         latest_event_version = 0
         pending_over_announcements: Dict[str, str] = {}
         announced_over_ids: set[str] = set()
+        claimed_over_ids: set[str] = set()
         # Snapshot from final.py's actual rendered CREX circle strip, polled separately.
         rendered_circle_state: Dict[str, Any] = {"status": "starting", "ball": None, "updated_at": 0.0}
         # Only summarize overs whose first delivery was observed after this broadcast started.
         tracked_full_overs: set[int] = set()
 
         async def queue_latest(event: Dict[str, Any]) -> None:
+            """Keep only the newest ball and transfer a one-shot recap if a queued event is replaced."""
             if ball_queue.full():
                 try:
                     dropped = ball_queue.get_nowait()
+                    incoming = list(event.get("over_announcements", []))
+                    incoming_ids = {item.get("id") for item in incoming}
+                    for recap in dropped.get("over_announcements", []):
+                        recap_id = recap.get("id")
+                        if recap_id and recap_id not in incoming_ids and recap_id not in announced_over_ids:
+                            incoming.append(recap)
+                            incoming_ids.add(recap_id)
+                    event["over_announcements"] = incoming
                     logger.info("Discarding queued stale ball %s; prioritizing %s",
                                 _normal_space(dropped.get("ball", {}).get("over")),
                                 _normal_space(event.get("ball", {}).get("over")))
@@ -963,6 +973,13 @@ class BroadcastHub:
                         if not next_delivery_task.done():
                             next_delivery_task.cancel()
                         await asyncio.gather(tts_task, next_delivery_task, return_exceptions=True)
+                        # A recap tied to this stale ball is consumed and must never be
+                        # regenerated onto every following ball.
+                        for recap in summaries_after_ball:
+                            recap_id = recap.get("id")
+                            if recap_id:
+                                announced_over_ids.add(recap_id)
+                                pending_over_announcements.pop(recap_id, None)
                         # Do not overwrite the newer ball's queue/debug state with
                         # diagnostics from a cancelled stale synthesis.
                         if (
@@ -1345,10 +1362,16 @@ class BroadcastHub:
                                     last_latest_key = latest_key
                                     last_latest_ball = latest_ball
                                     latest_event_version += 1
-                                    pending_summaries = [
-                                        {"id": over_id, "text": summary}
-                                        for over_id, summary in pending_over_announcements.items()
-                                    ]
+                                    # Attach each over recap to exactly one live event.
+                                    # Reattaching every pending recap to every later ball caused
+                                    # the same completed-over sentence to repeat on subsequent balls.
+                                    pending_summaries = []
+                                    for over_id, summary in list(pending_over_announcements.items()):
+                                        if over_id in announced_over_ids or over_id in claimed_over_ids:
+                                            continue
+                                        pending_summaries.append({"id": over_id, "text": summary})
+                                        claimed_over_ids.add(over_id)
+                                        pending_over_announcements.pop(over_id, None)
                                     # Generate the manual circle call immediately at detection,
                                     # publish its text now, then synthesize audio asynchronously.
                                     circle_token = _normal_space(
@@ -1509,7 +1532,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-radio-20261021-17",
+        "server_build": "radio-hinglish-fast-20261022-1",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
