@@ -393,10 +393,13 @@ def _latest_source_ball(balls: list[Dict[str, Any]]) -> Optional[Dict[str, Any]]
 
 
 def _ball_identity(ball: Dict[str, Any]) -> str:
-    """Stable delivery identity that doesn't change if CREX refreshes the commentary wording."""
+    """Stable delivery key; rendered sequence distinguishes repeated wides/dots at the same label."""
     over = _normal_space(ball.get("over")).lower()
     matchup = _normal_space(ball.get("matchup")).lower()
     runs = _normal_space((ball.get("circle_val") or ball.get("runs"))).upper()
+    rendered_seq = _normal_space(ball.get("browser_seq"))
+    if ball.get("rendered_circle") and rendered_seq:
+        return f"{over}|seq:{rendered_seq}|{matchup}|{runs}"
     if not over or over.lower() == "live":
         text = _normal_space(ball.get("commentary"))[:100].lower()
         return f"{over}|{matchup}|{runs}|{text}"
@@ -1418,7 +1421,7 @@ class BroadcastHub:
                                     radio_preview = _normal_space(
                                         radio_meta.get("spoken_text") or f"Live ball {live_info['over']}."
                                     )
-                                    event_id = f"{live_info['over']}|{circle_token}"
+                                    event_id = latest_key
                                     radio_badge = radio_meta.get("badge") or _source_badge(latest_ball)
                                     radio_rate = radio_meta.get("rate") or "+15%"
                                     radio_pitch = radio_meta.get("pitch") or "+10Hz"
@@ -1562,7 +1565,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "radio-final-pro-instant-20261022-1",
+        "server_build": "radio-final-pro-instant-20261022-2",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
