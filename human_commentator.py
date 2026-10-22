@@ -126,6 +126,106 @@ def number_to_hindi_words(num_str) -> str:
     return str(n)
 
 
+def over_ordinal_hindi(over_num: int) -> str:
+    return HINDI_OVER_WORDS.get(over_num, f"{number_to_hindi_words(over_num)}वें")
+
+
+def parse_ball(ball_str: str) -> tuple[int, int]:
+    """'3.4' -> (over_number=4, ball_index=4). The page counts completed overs."""
+    parts = (ball_str or "").strip().split(".")
+    over_num = int(parts[0]) + 1
+    idx = int(parts[1]) if len(parts) > 1 and parts[1] else 1
+    return over_num, min(max(idx, 1), 6)
+
+
+def format_ball_phrase_hindi(ball_str: str) -> str:
+    try:
+        over_num, idx = parse_ball(ball_str)
+        return f"{over_ordinal_hindi(over_num)} ओवर की {HINDI_BALL_WORDS.get(idx, f'{idx}वीं गेंद')}"
+    except Exception:
+        return "अगली गेंद"
+
+
+def format_over_phrase_hindi(ball_str: str) -> str:
+    try:
+        over_num, _ = parse_ball(ball_str)
+        return f"{over_ordinal_hindi(over_num)} ओवर में"
+    except Exception:
+        return "इस ओवर में"
+
+
+
+# ============================================================
+# MASTER PHONETIC DICTIONARY
+# ============================================================
+COMMON_NAMES = {
+    "muditha": "मुदिथा", "disanayaka": "डिसानायका",
+    "aftab": "आफताब", "alam": "आलम", "shah": "शाह",
+    "aryansh": "आर्यांश", "sharma": "शर्मा",
+    "y": "वाई", "rai": "राय",
+    "ethan": "ईथन", "carl": "कार्ल", "dsouza": "डिसूज़ा",
+    "vicky": "विक्की", "ranjan": "रंजन", "wahab": "वहाब", "hassan": "हसन",
+    "zadran": "जादरान", "panoly": "पनोली", "sabnani": "सबनानी", "parashar": "पाराशर",
+    "asif": "आसिफ", "taniwal": "तानीवाल", "noorullah": "नूरुल्लाह", "ayobi": "अय्यूबी",
+    # common surnames / first names
+    "singh": "सिंह", "khan": "खान", "kumar": "कुमार", "ali": "अली",
+    "ahmed": "अहमद", "ahmad": "अहमद", "mohammad": "मोहम्मद", "mohammed": "मोहम्मद",
+    "muhammad": "मुहम्मद", "patel": "पटेल", "malik": "मलिक", "iqbal": "इकबाल",
+    "rahman": "रहमान", "raza": "रज़ा",
+}
+
+PHONIC_RULES = (
+    ("sh", "श"), ("ch", "च"), ("th", "थ"), ("ph", "फ"), ("kh", "ख"),
+    ("gh", "घ"), ("bh", "भ"), ("dh", "ध"), ("jh", "झ"), ("ee", "ी"),
+    ("oo", "ू"), ("aa", "ा"), ("ai", "ै"), ("au", "ौ"),
+    ("a", "ा"), ("b", "ब"), ("c", "क"), ("d", "ड"), ("e", "े"),
+    ("f", "फ"), ("g", "ग"), ("h", "ह"), ("i", "ि"), ("j", "ज"),
+    ("k", "क"), ("l", "ल"), ("m", "म"), ("n", "न"), ("o", "ो"),
+    ("p", "प"), ("q", "क"), ("r", "र"), ("s", "स"), ("t", "ट"),
+    ("u", "ु"), ("v", "व"), ("w", "व"), ("x", "क्स"), ("y", "य"), ("z", "ज़"),
+)
+
+INITIAL_VOWELS = {
+    "aa": "आ", "ee": "ई", "oo": "ऊ", "ai": "ऐ", "au": "औ",
+    "a": "अ", "e": "ए", "i": "इ", "o": "ओ", "u": "उ",
+}
+
+_NAME_NOISE = re.compile(
+    r"\b(to|w|wd|nb|wide|no\s*runs?|runs?|dots?|out|c|b|wkt|wk|lb|st|\d+)\b",
+    flags=re.IGNORECASE,
+)
+
+
+def clean_player_name_to_hindi(raw_name: Optional[str]) -> str:
+    if not raw_name:
+        return ""
+    cleaned = _NAME_NOISE.sub("", raw_name)
+    cleaned = re.sub(r"[^A-Za-z\s']", " ", cleaned).strip()
+    result = []
+    for word in cleaned.split():
+        key = word.lower().replace("'", "")
+        if not key:
+            continue
+        if key in COMMON_NAMES:
+            result.append(COMMON_NAMES[key])
+            continue
+        word_hi, idx = "", 0
+        while idx < len(key):
+            matched = False
+            for pattern, repl in PHONIC_RULES:
+                if key.startswith(pattern, idx):
+                    if idx == 0 and pattern in INITIAL_VOWELS:
+                        repl = INITIAL_VOWELS[pattern]
+                    word_hi += repl
+                    idx += len(pattern)
+                    matched = True
+                    break
+            if not matched:
+                idx += 1
+        result.append(word_hi if word_hi else word)
+    return " ".join(result)
+
+
 def _number(token: str, default: int = 0) -> int:
     match = re.search(r"\d+", token or "")
     return int(match.group(0)) if match else default
@@ -195,6 +295,389 @@ def _wicket_type(source: str) -> str:
     if re.search(r"\b(caught|catch|catches)\b|कैच|पकड़ा|पकड़", text):
         return "caught"
     return "wicket"
+
+# ============================================================
+# DELIVERY BADGE PARSER
+# ============================================================
+def classify_delivery(token: Optional[str]) -> dict:
+    t = re.sub(r"[\s+]", "", (token or "").strip().lower())
+    num = re.search(r"\d+", t)
+    n = int(num.group()) if num else None
+
+    if t in ("w", "wkt", "out"):
+        return {"kind": "wicket", "runs": 0, "legal": True}
+    if "wd" in t or "wide" in t:
+        return {"kind": "wide", "runs": n if n else 1, "legal": False}
+    if "nb" in t or "noball" in t:
+        return {"kind": "noball", "runs": n if n else 1, "legal": False}
+    if "lb" in t:
+        return {"kind": "legbye", "runs": n if n else 1, "legal": True}
+    if re.fullmatch(r"\d*b|b\d*", t):
+        return {"kind": "bye", "runs": n if n else 1, "legal": True}
+    if t.isdigit():
+        return {"kind": "runs" if n else "dot", "runs": n or 0, "legal": True}
+    return {"kind": "dot", "runs": 0, "legal": True}
+
+
+def over_stats_from_tokens(tokens) -> dict:
+    stats = {"runs": 0, "fours": 0, "sixes": 0, "wickets": 0, "legal": 0}
+    for tok in tokens or []:
+        d = classify_delivery(tok)
+        stats["runs"] += d["runs"]
+        if d["legal"]:
+            stats["legal"] += 1
+        if d["kind"] == "wicket":
+            stats["wickets"] += 1
+        elif d["kind"] == "runs" and d["runs"] == 4:
+            stats["fours"] += 1
+        elif d["kind"] == "runs" and d["runs"] == 6:
+            stats["sixes"] += 1
+    return stats
+
+
+def guess_match_overs(url: str) -> Optional[int]:
+    u = (url or "").lower()
+    if re.search(r"(?<![a-z0-9])[dt]10(?![a-z0-9])", u):
+        return 10
+    if re.search(r"(?<![a-z0-9])t20i?(?![a-z0-9])", u) or "twenty20" in u:
+        return 20
+    if re.search(r"(?<![a-z0-9])(?:odi|50-over)(?![a-z0-9])", u):
+        return 50
+    return None
+
+
+# ============================================================
+# NATURAL RADIO COMMENTARY SCRIPTS
+# ============================================================
+SIX_LINES = (
+    "उठाकर मारा! गेंद आसमान में... बहुत ऊंची... और ये गई स्टैंड्स में! छह रन!",
+    "क्रीज़ से बाहर निकलकर सीधा प्रहार! गेंद मैदान के बाहर, गगनचुंबी छक्का!",
+    "बल्ले के बिल्कुल बीचों-बीच लगी! गेंद सीमा रेखा के बहुत पार, दर्शकों के बीच! छह रन!",
+    "ये तो सीधा आसमान में! फील्डर बस देखते रह गए, ये छक्का है!",
+    "क्या हिट है! स्वीट स्पॉट से निकली और गेंद स्टेडियम के बाहर की तरफ़! मैक्सिमम!",
+    "इसे कहते हैं पावर हिटिंग! गेंद हवा में और सीधा सीमा रेखा के उस पार! छह रन!",
+)
+SIX_TAGS = (
+    "{batsman} का ज़बरदस्त छक्का!",
+    "{bowler} की गेंद पर पड़ी ज़बरदस्त मार!",
+    "{batsman} पूरे रंग में नज़र आ रहे हैं!",
+    "{bowler} के लिए बहुत महंगी साबित हुई ये गेंद!",
+)
+
+FOUR_LINES = (
+    "गजब की टाइमिंग! फील्डर को हिलने का भी मौका नहीं मिला, गेंद गोली की रफ्तार से सीमा रेखा के पार! चौका!",
+    "कलाइयों का जादू! खूबसूरत प्लेसमेंट, गेंद रस्सी के पार! चार रन!",
+    "गैप मिला और गेंद सीधी बाउंड्री पर! फील्डर ने पीछा किया पर बहुत देर हो चुकी थी, चौका!",
+    "ज़मीन के साथ-साथ दौड़ी गेंद और बाउंड्री लाइन के पार! शानदार चौका!",
+    "क्लासिक शॉट! बेहतरीन टाइमिंग, गेंद चार रन के लिए सीमा रेखा के बाहर!",
+)
+FOUR_TAGS = (
+    "{batsman} का खूबसूरत शॉट!",
+    "{bowler} की लेंथ थोड़ी चूकी और बल्लेबाज़ ने उसे सज़ा दे दी!",
+    "{batsman} को मिल गई लय!",
+)
+
+DOT_LINES = (
+    "कसी हुई लाइन और लेंथ, बल्लेबाज़ ने संभलकर खेला, कोई रन नहीं, डॉट बॉल।",
+    "शानदार गेंद! बल्लेबाज़ को पूरी तरह छकाया, गेंद सीधे विकेटकीपर के दस्तानों में।",
+    "सीधा फील्डर के हाथों में खेला, रन का कोई मौका नहीं।",
+    "बल्ले के बाहरी किनारे को छूते-छूते बची गेंद, कोई रन नहीं।",
+)
+SINGLE_LINES = (
+    "हल्के हाथों से कवर्स की ओर खेला और तेज़ी से एक सिंगल पूरा किया।",
+    "कलाइयों को मोड़कर स्ट्राइक रोटेट की, आसानी से एक रन चुरा लिया।",
+    "गेंद को गैप में धकेला और एक रन लेकर स्ट्राइक बदल ली।",
+)
+DOUBLE_LINES = (
+    "गैप में खेलकर दो फील्डर्स के बीच से बढ़िया रनिंग, आसानी से दो रन पूरे किए!",
+    "सॉफ्ट हैंड्स से धकेला, बढ़िया तालमेल और दौड़कर दो रन निकाले!",
+)
+THREE_LINE = "शानदार रनिंग बिटवीन द विकेट्स, दोनों बल्लेबाज़ों ने दौड़कर तीन रन पूरे किए!"
+FIVE_LINE = "पांच रन! ओवरथ्रो का फायदा या बेहतरीन दौड़, बल्लेबाज़ों नेत पांच रन बटोर लिए!"
+
+WIDE_LINES = (
+    "दिशाहीन गेंदबाज़ी, लेग स्टंप से काफ़ी बाहर, अंपायर ने दोनों हाथ फैलाए, वाइड!",
+    "लाइन से भटकी गेंद, वाइड का इशारा! गेंदबाज़ को एक गेंद और डालनी होगी!",
+)
+NOBALL_LINES = (
+    "नो बॉल! गेंदबाज़ ने क्रीज़ को ओवरस्टेप किया, अब अगली गेंद फ्री हिट!",
+    "अंपायर का हाथ ऊपर, नो बॉल! और अगली गेंद पर मिलेगी फ्री हिट!",
+)
+LEGBYE_LINE = "गेंद पैड से लगकर निकल गई, बल्लेबाज़ों ने लेग बाई के {runs} रन दौड़कर चुरा लिए!"
+BYE_LINE = "विकेटकीपर के हाथों से निकल गई गेंद, बाई के {runs} रन!"
+
+INTROS_BOTH = (
+    "{bowler} की गेंद, सामने {batsman},",
+    "{bowler} दौड़ते हुए आए, गेंद {batsman} की ओर,",
+    "{bowler} ने डाली गेंद, {batsman} तैयार,",
+    "{bowler} से {batsman} को,",
+)
+
+
+def build_intro(bowler: str, batsman: str) -> str:
+    if bowler and batsman:
+        return random.choice(INTROS_BOTH).format(bowler=bowler, batsman=batsman)
+    if bowler:
+        return f"{bowler} गेंदबाज़ी छोर से तैयार,"
+    return ""
+
+
+def pick_tag(tags, batsman: str, bowler: str) -> str:
+    usable = [
+        t for t in tags
+        if not (("{batsman}" in t and not batsman) or ("{bowler}" in t and not bowler))
+    ]
+    return random.choice(usable).format(batsman=batsman, bowler=bowler) if usable else ""
+
+
+# ------------------------------------------------------------
+# Wickets
+# ------------------------------------------------------------
+_NAME = r"[a-z .'\-]"
+
+def build_live_wicket_speech(
+    dismissal_text: str,
+    batter_name: str,
+    batter_runs: str,
+    batter_balls: str,
+    bowler_name: str = "",
+) -> str:
+    batter_hi = clean_player_name_to_hindi(batter_name) or "बल्लेबाज़"
+    runs_known = str(batter_runs).strip().isdigit()
+    balls_known = str(batter_balls).strip().isdigit()
+    runs_val = int(batter_runs) if runs_known else 0
+    runs_hi = number_to_hindi_words(runs_val)
+    balls_hi = number_to_hindi_words(batter_balls) if balls_known else ""
+
+    if runs_known and runs_val > 0:
+        status = f"{balls_hi} गेंदों में {runs_hi} रन बनाकर" if balls_hi else f"{runs_hi} रन बनाकर"
+    elif runs_known:
+        status = "बिना खाता खोले"
+    else:
+        status = ""
+    who = f"{batter_hi} {status}".strip()
+
+    d = re.sub(r"\s+", " ", (dismissal_text or "").lower()).strip()
+
+    m = re.search(rf"\bc\s*&\s*b\s+({_NAME}+)", d)
+    if m:
+        bowler = clean_player_name_to_hindi(m.group(1))
+        return random.choice((
+            f"और ये लिया कैच, खुद गेंदबाज़ ने! {bowler} ने अपनी ही गेंद पर लपका कैच! {who} पवेलियन लौट रहे हैं!",
+            f"कैच एंड बोल्ड! {bowler} ने ज़बरदस्त रिफ्लेक्स दिखाया, {who} वापस लौट रहे हैं!",
+        ))
+
+    m = re.search(rf"\bc\s+({_NAME}+?)\s+b\s+({_NAME}+)", d)
+    if m:
+        fielder = clean_player_name_to_hindi(m.group(1))
+        bowler = clean_player_name_to_hindi(m.group(2))
+        return random.choice((
+            f"गेंद हवा में उठी... और सुरक्षित हाथों में! {fielder} ने कैच लपक लिया! विकेट! "
+            f"{who} पवेलियन लौट रहे हैं, {bowler} को मिली बड़ी कामयाबी!",
+            f"बड़ा विकेट! शॉट गलत लगा और {fielder} ने कोई गलती नहीं की! "
+            f"{who} कैच आउट, {bowler} की गेंद पर!",
+        ))
+
+    m = re.search(rf"\bst\s+({_NAME}+?)\s+b\s+({_NAME}+)", d)
+    if m:
+        keeper = clean_player_name_to_hindi(m.group(1))
+        bowler = clean_player_name_to_hindi(m.group(2))
+        return (
+            f"बल्लेबाज़ क्रीज़ से बाहर... और विकेटकीपर {keeper} ने बेल्स उड़ा दीं! स्टंप्ड! "
+            f"{who} पवेलियन लौट रहे हैं, {bowler} की गेंद पर!"
+        )
+
+    if "lbw" in d:
+        m = re.search(rf"lbw\s+b\s+({_NAME}+)", d)
+        bowler = clean_player_name_to_hindi(m.group(1)) if m else clean_player_name_to_hindi(bowler_name)
+        tail = f", {bowler} को मिला विकेट" if bowler else ""
+        return (
+            f"ज़ोरदार अपील... और अंपायर ने उंगली उठा दी! एलबीडब्ल्यू! "
+            f"{who} पवेलियन लौट रहे हैं{tail}!"
+        )
+
+    if "run out" in d or "runout" in d:
+        return random.choice((
+            f"आपसी तालमेल बिगड़ा... थ्रो सीधा स्टंप्स पर... और रन आउट! {who} पवेलियन लौट रहे हैं!",
+            f"रन चुराने की कोशिश भारी पड़ी! रन आउट! {who} वापस लौट रहे हैं!",
+        ))
+
+    if "hit wicket" in d or "hitwicket" in d:
+        return f"अपने ही स्टंप्स पर जा लगा बल्ला! हिट विकेट! {who} पवेलियन लौट रहे हैं!"
+
+    m = re.search(rf"\bb\s+({_NAME}+)", d)
+    if m:
+        bowler = clean_player_name_to_hindi(m.group(1))
+        return random.choice((
+            f"गिल्लियां बिखर गईं! क्लीन बोल्ड! {bowler} की शानदार गेंद ने स्टंप उखाड़ दिए! "
+            f"{who} पवेलियन लौट रहे हैं!",
+            f"बोल्ड! बोल्ड! {bowler} ने बल्लेबाज़ को पूरी तरह छका दिया, {who} पवेलियन लौट रहे हैं!",
+        ))
+
+    bowler = clean_player_name_to_hindi(bowler_name)
+    if bowler:
+        return f"विकेट! विकेट! {bowler} की गेंद पर बड़ा झटका! {who} पवेलियन लौट रहे हैं!"
+    return f"विकेट! बड़ा झटका! {who} पवेलियन लौट रहे हैं!"
+
+
+def score_after_wicket_phrase(runs: int, wkts: int) -> str:
+    runs_hi = number_to_hindi_words(runs)
+    wkts_hi = number_to_hindi_words(wkts)
+    phrase = f"स्कोर अब {runs_hi} रन, {wkts_hi} विकेट के नुकसान पर।"
+    if wkts >= 10:
+        phrase += " और ये आखिरी विकेट! पूरी टीम ऑल आउट!"
+    return phrase
+
+
+# ------------------------------------------------------------
+# Ball-by-ball
+# ------------------------------------------------------------
+def generate_circle_ball_commentary(
+    ball_num: str,
+    circle_val: Optional[str],
+    bowler_raw: Optional[str],
+    batsman_raw: Optional[str],
+    last_dismissal: Optional[dict] = None,
+) -> tuple[str, int]:
+    ball_phrase = format_ball_phrase_hindi(ball_num)
+    over_phrase = format_over_phrase_hindi(ball_num)
+    bowler = clean_player_name_to_hindi(bowler_raw)
+    batsman = clean_player_name_to_hindi(batsman_raw)
+
+    d = classify_delivery(circle_val)
+    kind, n = d["kind"], d["runs"]
+
+    if kind == "wicket":
+        batter_to_announce = batsman_raw or ""
+        runs_s, balls_s, how_out = "", "", ""
+        card = last_dismissal or {}
+        card_b = card.get("batter", "") or ""
+        if card_b:
+            same_player = (not batsman_raw) or any(
+                part.lower() in card_b.lower() for part in batsman_raw.split() if len(part) > 2
+            )
+            if same_player:
+                batter_to_announce = card_b
+                runs_s = card.get("runs", "")
+                balls_s = card.get("balls", "")
+                how_out = card.get("howOut", "")
+        speech = build_live_wicket_speech(how_out, batter_to_announce, runs_s, balls_s, bowler_raw or "")
+        return f"{ball_phrase}, {speech}", 4
+
+    if kind == "wide":
+        extra = f" अतिरिक्त {number_to_hindi_words(n)} रन।" if n > 1 else ""
+        return f"{over_phrase} {random.choice(WIDE_LINES)}{extra}", 2
+    if kind == "noball":
+        return f"{over_phrase} {random.choice(NOBALL_LINES)}", 2
+
+    intro = build_intro(bowler, batsman)
+    tag = ""
+    if kind == "legbye":
+        action, level = LEGBYE_LINE.format(runs=number_to_hindi_words(n)), 2
+    elif kind == "bye":
+        action, level = BYE_LINE.format(runs=number_to_hindi_words(n)), 2
+    elif n >= 6:
+        action, level = random.choice(SIX_LINES), 4
+        tag = pick_tag(SIX_TAGS, batsman, bowler)
+    elif n == 5:
+        action, level = FIVE_LINE, 2
+    elif n == 4:
+        action, level = random.choice(FOUR_LINES), 3
+        tag = pick_tag(FOUR_TAGS, batsman, bowler)
+    elif n == 3:
+        action, level = THREE_LINE, 2
+    elif n == 2:
+        action, level = random.choice(DOUBLE_LINES), 2
+    elif n == 1:
+        action, level = random.choice(SINGLE_LINES), 2
+    else:
+        action, level = random.choice(DOT_LINES), 1
+
+    text = " ".join(p for p in (f"{ball_phrase},", intro, action, tag) if p)
+    return text, level
+
+
+def _count_phrase(n: int, one: str, many: str) -> str:
+    return one if n == 1 else f"{number_to_hindi_words(n)} {many}"
+
+
+def _join_hindi(items: list[str]) -> str:
+    if len(items) <= 1:
+        return "".join(items)
+    return ", ".join(items[:-1]) + " और " + items[-1]
+
+
+def _rr_thresholds(match_overs: Optional[int]) -> tuple[float, float]:
+    if match_overs and match_overs <= 10:
+        return 11.0, 8.0
+    if match_overs and match_overs >= 40:
+        return 6.5, 4.5
+    return 8.5, 6.5
+
+
+def build_over_summary(
+    over_int: int,
+    runs,
+    wkts,
+    stats: Optional[dict] = None,
+    match_overs: Optional[int] = None,
+) -> str:
+    """Short Hinglish over recap with a naturally spoken current score."""
+    parts: list[str] = []
+
+    if stats and stats.get("legal", 0) >= 6:
+        over_runs = int(stats.get("runs", 0))
+        over_wickets = int(stats.get("wickets", 0))
+        fours = int(stats.get("fours", 0))
+        sixes = int(stats.get("sixes", 0))
+        if over_runs == 0 and over_wickets == 0:
+            parts.append(f"Over {over_int} complete—maiden over! Is over mein koi run nahi. Great bowling!")
+        elif over_runs == 0:
+            parts.append(f"Over {over_int} complete—wicket maiden! Koi run nahi, {over_wickets} wicket. Superb bowling!")
+        else:
+            details = []
+            if fours:
+                details.append(f"{fours} fours")
+            if sixes:
+                details.append(f"{sixes} sixes")
+            if over_wickets:
+                details.append(f"{over_wickets} wickets")
+            line = f"Over {over_int} complete! Is over mein {over_runs} runs aaye"
+            if details:
+                line += ", " + ", ".join(details)
+            parts.append(line + ".")
+    else:
+        parts.append(f"Over {over_int} complete.")
+
+    try:
+        runs_num = int(str(runs).strip())
+        wkts_num = int(str(wkts).strip())
+    except (TypeError, ValueError):
+        return " ".join(parts)
+
+    parts.append(f"Score {runs_num} for {wkts_num}.")
+    crr = round(runs_num / max(over_int, 1), 2)
+    high, mid = _rr_thresholds(match_overs)
+    if crr >= high:
+        parts.append(f"Run rate {crr:.2f} per over hai—batting side achchi position mein hai.")
+    elif crr >= mid:
+        parts.append(f"Run rate {crr:.2f} per over hai, scoring steady chal rahi hai.")
+    else:
+        parts.append(f"Run rate {crr:.2f} per over hai—ab runs accelerate karne honge.")
+
+    if match_overs and over_int < match_overs:
+        parts.append(f"{match_overs - over_int} overs abhi baaki hain.")
+
+    return " ".join(parts)
+
+def build_innings_end(runs, wkts) -> str:
+    try:
+        runs_hi = number_to_hindi_words(int(runs))
+        wkts_hi = number_to_hindi_words(int(wkts))
+        return f"पारी समाप्त! स्कोर {runs_hi} रन, {wkts_hi} विकेट के नुकसान पर।"
+    except (TypeError, ValueError):
+        return "पारी समाप्त!"
+
 
 
 class HumanCommentator:
