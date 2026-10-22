@@ -5,7 +5,7 @@ from typing import Any
 import edge_tts
 from flask import Flask, jsonify, request, Response
 from playwright.async_api import async_playwright
-from final import build_live_circle_announcement, prepare_tts_pronunciation_text
+from final import build_live_circle_announcement
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
@@ -80,7 +80,7 @@ async def run_monitor(url):
                                 info = {"over":ball,"circle_val":badge,"runs":badge,"bowler":snap.get("bowler",""),"batter":snap.get("batsman",""),"matchup":(snap.get("bowler","")+" to "+snap.get("batsman","")).strip(),"last_dismissal":{},"total_runs":snap.get("runs"),"total_wickets":snap.get("wkts")}
                                 meta = build_live_circle_announcement(info, lang="hi") or {}
                                 line = str(meta.get("spoken_text") or ("गेंद "+str(ball)+", "+str(badge)+" रन"))
-                                speech = str(meta.get("tts_text") or prepare_tts_pronunciation_text(line, info))
+                                speech = str(meta.get("tts_text") or line)
                                 update_state(commentary=line, status="preparing audio")
                                 await synthesize(speech, meta.get("level", 2))
                                 update_state(status="monitoring")
