@@ -87,13 +87,22 @@ class HinglishCommentaryTests(unittest.TestCase):
 
     def test_circle_builder_returns_separate_pronunciation_text(self):
         result = build_live_circle_announcement({
-            "over": "35.3", "circle_val": "1", "runs": "1",
+            "over": "35.4", "circle_val": "W", "runs": "W",
             "bowler": "Liam Dawson", "batsman": "Dasun Shanaka",
             "matchup": "Liam Dawson to Dasun Shanaka",
+            "last_dismissal": {
+                "batter": "Dasun Shanaka", "runs": "40", "balls": "23",
+                "howOut": "c Pavan Rathnayake b Liam Dawson"
+            },
+            "total_runs": 262, "total_wickets": 4,
+            "striker": "Pavan Rathnayake", "striker_runs": 101, "striker_balls": 88,
+            "non_striker": "Dasun Shanaka", "non_striker_runs": 40, "non_striker_balls": 23,
         }, lang="hinglish")
         self.assertIn("Dasun Shanaka", result["spoken_text"])
+        self.assertIn("Liam Dawson", result["spoken_text"])
         self.assertIn("दासुन शनाका", result["tts_text"])
         self.assertIn("लियाम डॉसन", result["tts_text"])
+        self.assertIn("पवन रथनायके", result["tts_text"])
 
     def test_recap_uses_normal_madhur_profile(self):
         self.assertEqual(AUDIO_PROFILES[2], ("+5%", "+1Hz", "+5%"))
