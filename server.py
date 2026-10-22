@@ -28,7 +28,7 @@ except ImportError:  # REST/HTML feed remains a fallback if Chromium is unavaila
 
 # Import existing core modules
 from cricket_streamer import CrexParser, create_tts, get_live_matches, resolve_match_url
-from human_commentator import build_live_circle_announcement, commentator
+from human_commentator import build_live_circle_announcement, build_live_over_summary, commentator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -471,62 +471,11 @@ def _delivery_stats(token: Any) -> tuple[int, bool, int, int, int]:
 
 
 def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str, score_state: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """Create a deterministic completed-over recap from CREX's source delivery badges."""
+    """Use the uploaded Pro Commentary over recap once per completed over."""
     rows = [b for b in balls if _ball_over_index(b) == over_index]
-    # Dedupe repeated DOM wrappers before computing stats.
-    unique: dict[str, Dict[str, Any]] = {}
-    for b in rows:
-        unique.setdefault(_ball_identity(b), b)
-    rows = list(unique.values())
     if not rows:
         return None
-
-    runs = fours = sixes = wickets = legal = 0
-    for ball in rows:
-        n, is_legal, f, s, w = _delivery_stats((ball.get("circle_val") or ball.get("runs")))
-        runs += n
-        legal += int(is_legal)
-        fours += f
-        sixes += s
-        wickets += w
-
-    spoken_over = over_index + 1
-    if lang in ("hinglish", "hi"):
-        line = (
-            f"Over {spoken_over} complete! Is over mein {runs} runs aaye, "
-            f"{fours} fours, {sixes} sixes aur {wickets} wickets."
-        )
-    else:
-        four_word = "four" if fours == 1 else "fours"
-        six_word = "six" if sixes == 1 else "sixes"
-        wicket_word = "wicket" if wickets == 1 else "wickets"
-        line = (
-            f"Over {spoken_over} complete. {runs} runs, {fours} {four_word}, "
-            f"{sixes} {six_word} and {wickets} {wicket_word}."
-        )
-
-    # Add a concise current-score suffix to over summaries in spoken Hinglish.
-    if score_state:
-        try:
-            team_score = f"{int(score_state.get('total_runs'))} for {int(score_state.get('total_wickets'))}"
-        except (TypeError, ValueError):
-            team_score = ""
-        batters = []
-        for prefix in ("striker", "non_striker"):
-            name = _normal_space(score_state.get(prefix))
-            runs_value = score_state.get(f"{prefix}_runs")
-            balls_value = score_state.get(f"{prefix}_balls")
-            if not name or runs_value is None or balls_value is None or name.lower().startswith("batter "):
-                continue
-            try:
-                batters.append(f"{name} {int(runs_value)} off {int(balls_value)}")
-            except (TypeError, ValueError):
-                continue
-        if team_score:
-            line += f" Score {team_score}."
-        if batters:
-            line += " " + ", ".join(batters) + "."
-    return line
+    return build_live_over_summary(over_index, rows, score_state=score_state, lang=lang)
 
 
 def _source_badge(ball: Dict[str, Any]) -> str:
@@ -1204,7 +1153,7 @@ class BroadcastHub:
         )
 
         try:
-            logger.info("Starting CREX poll loop (0.75-second interval); speech backlog is disabled")
+            logger.info("Starting CREX poll loop (0.35-second interval); speech backlog is disabled")
             async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
                 while self.is_running:
                     try:
@@ -1484,7 +1433,7 @@ class BroadcastHub:
                             await self.broadcast_ws("error", {"message": f"Connection issue with match feed: {exc}"})
                             consecutive_errors = 0
 
-                    await asyncio.sleep(0.75)
+                    await asyncio.sleep(0.35)
 
         except asyncio.CancelledError:
             logger.info("Broadcast pipeline cancelled by user")
@@ -1565,7 +1514,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "radio-final-score-gate-20261022-1",
+        "server_build": "pro-commentary-engine-20261022-1",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
