@@ -948,6 +948,7 @@ class BroadcastHub:
                         "provider": tts_provider,
                         "voice": getattr(tts, "voice", None) or getattr(tts, "speaker", None),
                         "language": lang,
+                        "event_id": current_event.get("event_id") or f"{ball_over}|{circle_token}",
                         "over": ball_over,
                         "source_text_length": len(source_text),
                         "radio_text_length": len(radio_text),
@@ -1011,12 +1012,24 @@ class BroadcastHub:
                         if not next_delivery_task.done():
                             next_delivery_task.cancel()
                         await asyncio.gather(tts_task, next_delivery_task, return_exceptions=True)
+                        event_id = current_event.get("event_id") or f"{ball_over}|{circle_token}"
                         self.latest_tts_debug.update({
                             "status": "timeout",
-                            "error": "TTS exceeded the 4.5-second low-latency limit",
+                            "error": "Edge TTS exceeded the 4.5-second low-latency limit; browser fallback is available",
+                            "event_id": event_id,
                             "over": ball_over,
+                            "circle_value": circle_token,
                         })
-                        logger.warning("TTS timed out for ball %s; waiting for the next delivery", ball_over)
+                        logger.warning("TTS timed out for ball %s; browser fallback may already have spoken it", ball_over)
+                        try:
+                            await self.broadcast_ws("tts_error", {
+                                "event_id": event_id,
+                                "over": ball_over,
+                                "circle_value": circle_token,
+                                "message": "Edge Madhur did not return audio within 4.5 seconds",
+                            })
+                        except Exception:
+                            pass
                         continue
 
                     if next_delivery_task not in done:
@@ -1549,7 +1562,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "radio-final-fast-fallback-20261022-1",
+        "server_build": "radio-final-pro-instant-20261022-1",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
