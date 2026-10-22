@@ -904,7 +904,7 @@ class BroadcastHub:
                 logger.warning("Rendered CREX circle watcher failed; HTML/API fallback remains active: %s", exc)
 
         async def broadcast_audio_bytes(text: str, badge: str, mp3_data: bytes,
-                                        kind: str) -> Optional[float]:
+                                        kind: str, speech_text: Optional[str] = None) -> Optional[float]:
             """Broadcast already-generated MP3 without delaying a newer circle."""
             if not mp3_data:
                 logger.warning("TTS returned empty audio for event type %s", kind)
@@ -916,6 +916,7 @@ class BroadcastHub:
                 "event_id": f"{kind}|{text[:120]}",
                 "version": latest_event_version,
                 "text": text,
+                "speech_text": speech_text or prepare_tts_pronunciation_text(text),
                 "badge": badge,
                 "audio_url": audio_url,
                 "duration": round(duration, 1),
@@ -957,7 +958,7 @@ class BroadcastHub:
                 logger.warning("Over recap %s returned empty audio; retaining it for retry", recap_id)
                 claimed_over_ids.discard(recap_id)
                 return None
-            duration = await broadcast_audio_bytes(recap_text, "OVER COMPLETE", mp3_data, "over_summary")
+            duration = await broadcast_audio_bytes(recap_text, "OVER COMPLETE", mp3_data, "over_summary", speech_text=recap_tts_text)
             if duration is None:
                 claimed_over_ids.discard(recap_id)
                 return None
@@ -1150,6 +1151,7 @@ class BroadcastHub:
                         "event_id": current_event.get("event_id") or f"{ball_over}|{circle_token}",
                         "version": current_event.get("version", 0),
                         "text": radio_text,
+                        "speech_text": radio_tts_text,
                         "badge": badge,
                         "over": ball_over,
                         "circle_value": circle_token,

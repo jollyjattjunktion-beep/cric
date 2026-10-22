@@ -1,6 +1,6 @@
 import unittest
 
-from final import AUDIO_PROFILES, build_live_circle_announcement, build_live_over_summary
+from final import AUDIO_PROFILES, build_live_circle_announcement, build_live_over_summary, clean_player_name_to_hindi, prepare_tts_pronunciation_text
 
 
 class HinglishCommentaryTests(unittest.TestCase):
@@ -66,6 +66,34 @@ class HinglishCommentaryTests(unittest.TestCase):
             build_live_circle_announcement(ball, lang="hi")["spoken_text"],
             build_live_circle_announcement(ball, lang="hinglish")["spoken_text"]
         )
+
+    def test_master_phonetic_dictionary_is_used_for_tts_not_display(self):
+        display = (
+            "Wicket! Dasun Shanaka pavilion laut rahe hain. "
+            "Liam Dawson ko wicket mila. Batters: Pavan Rathnayake."
+        )
+        context = {
+            "bowler": "Liam Dawson",
+            "batsman": "Dasun Shanaka",
+            "striker": "Pavan Rathnayake",
+            "matchup": "Liam Dawson to Dasun Shanaka",
+        }
+        spoken = prepare_tts_pronunciation_text(display, context)
+        self.assertIn("दासुन शनाका", spoken)
+        self.assertIn("लियाम डॉसन", spoken)
+        self.assertIn("पवन रथनायके", spoken)
+        self.assertIn("Dasun Shanaka", display)  # original screen text is preserved
+        self.assertEqual(clean_player_name_to_hindi("Pavan Rathnayake"), "पवन रथनायके")
+
+    def test_circle_builder_returns_separate_pronunciation_text(self):
+        result = build_live_circle_announcement({
+            "over": "35.3", "circle_val": "1", "runs": "1",
+            "bowler": "Liam Dawson", "batsman": "Dasun Shanaka",
+            "matchup": "Liam Dawson to Dasun Shanaka",
+        }, lang="hinglish")
+        self.assertIn("Dasun Shanaka", result["spoken_text"])
+        self.assertIn("दासुन शनाका", result["tts_text"])
+        self.assertIn("लियाम डॉसन", result["tts_text"])
 
     def test_recap_uses_normal_madhur_profile(self):
         self.assertEqual(AUDIO_PROFILES[2], ("+5%", "+1Hz", "+5%"))
