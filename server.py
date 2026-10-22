@@ -913,6 +913,8 @@ class BroadcastHub:
             audio_url = "data:audio/mpeg;base64," + base64.b64encode(mp3_data).decode("ascii")
             self.latest_commentary = text
             await self.broadcast_ws("commentary", {
+                "event_id": f"{kind}|{text[:120]}",
+                "version": latest_event_version,
                 "text": text,
                 "badge": badge,
                 "audio_url": audio_url,
@@ -943,7 +945,7 @@ class BroadcastHub:
                 return None
             try:
                 mp3_data = await asyncio.wait_for(
-                    tts.speak_mp3(recap_text, rate="+5%", pitch="+0Hz"),
+                    tts.speak_mp3(recap_text, rate="+5%", pitch="+1Hz"),
                     timeout=4.5,
                 )
             except asyncio.TimeoutError:
@@ -1611,7 +1613,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "pro-commentary-engine-20261022-1",
+        "server_build": "pro-commentary-engine-20261022-2",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
