@@ -1419,19 +1419,18 @@ class BroadcastHub:
                             if latest_key != last_latest_key:
                                 old_over = _ball_over_index(last_latest_ball or {}) if last_latest_ball else None
                                 new_over = _ball_over_index(latest_ball)
-                                if (old_over is not None and new_over is not None
-                                        and new_over > old_over and old_over in tracked_full_overs):
-                                    over_id = f"{last_latest_state.get('batting_team', '')}:{old_over}"
-                                    if over_id not in announced_over_ids and over_id not in pending_over_announcements:
-                                        summary_text = _over_announcement(old_over, raw_balls, lang, fresh_data)
-                                        if summary_text:
-                                            pending_over_announcements[over_id] = summary_text
-                                            pending_over_indices[over_id] = old_over
-                                            pending_over_positions[over_id] = "before_ball"
-                                            logger.info("Queued completed-over announcement for over %s", old_over + 1)
+                                if old_over is not None and new_over is not None and new_over > old_over:
+                                    # Fallback if the rendered sixth-ball signal was missed.
+                                    # A transition alone is not enough without six legal deliveries.
+                                    register_completed_over(
+                                        old_over, raw_balls, last_latest_state or fresh_data,
+                                        position="before_ball",
+                                    )
 
                                 # Ignore a stale/backwards page snapshot rather than speaking it.
                                 if (_ball_order(latest_ball) >= _ball_order(last_latest_ball or {})):
+                                    if new_over is not None:
+                                        register_completed_over(new_over, raw_balls, fresh_data, position="after_ball")
                                     last_latest_key = latest_key
                                     last_latest_ball = latest_ball
                                     latest_event_version += 1
