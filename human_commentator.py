@@ -566,9 +566,9 @@ def generate_circle_ball_commentary(
 
     if kind == "wide":
         extra = f" अतिरिक्त {number_to_hindi_words(n)} रन।" if n > 1 else ""
-        return f"{over_phrase} {random.choice(WIDE_LINES)}{extra}", 2
+        return f"{ball_phrase}, {random.choice(WIDE_LINES)}{extra}", 2
     if kind == "noball":
-        return f"{over_phrase} {random.choice(NOBALL_LINES)}", 2
+        return f"{ball_phrase}, {random.choice(NOBALL_LINES)}", 2
 
     intro = build_intro(bowler, batsman)
     tag = ""
@@ -929,4 +929,97 @@ class HumanCommentator:
 
 
 commentator = HumanCommentator()
+
+
+def build_live_circle_announcement(
+    ball_info: Dict[str, Any],
+    lang: str = "hi",
+) -> Dict[str, Any]:
+    """Use final.py's handcrafted radio scripts; circle token alone selects the delivery."""
+    info = dict(ball_info or {})
+    ball_num = _space(info.get("over"))
+    token = _space(info.get("circle_val") or info.get("runs")).upper()
+    d = classify_delivery(token)
+
+    bowler = _space(info.get("bowler"))
+    batter = _space(info.get("batsman") or info.get("batter"))
+    matchup = _space(info.get("matchup"))
+    parts = re.split(r"\s+to\s+", matchup, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) == 2:
+        bowler = bowler or parts[0].strip(" ,:.")
+        batter = batter or parts[1].strip(" ,:.")
+    bowler = bowler or _space(info.get("current_bowler"))
+    batter = batter or _space(info.get("striker"))
+
+    dismissal = info.get("last_dismissal") or info.get("lastDismissal") or {}
+    speech, level = generate_circle_ball_commentary(
+        ball_num,
+        token,
+        bowler or None,
+        batter or None,
+        dismissal if isinstance(dismissal, dict) else None,
+    )
+
+    # Say the live score in conversational Hinglish after scoring events.
+    # Do not copy any scraped CREX commentary sentence into the voice text.
+    if d["kind"] in {"runs", "wide", "noball", "legbye", "bye", "wicket"}:
+        score_parts = []
+        try:
+            team_runs = int(info.get("total_runs"))
+            team_wickets = int(info.get("total_wickets"))
+            score_parts.append(f"Score {team_runs} for {team_wickets}.")
+        except (TypeError, ValueError):
+            pass
+
+        batter_parts = []
+        for prefix in ("striker", "non_striker"):
+            name = _space(info.get(prefix))
+            runs_value = info.get(f"{prefix}_runs")
+            balls_value = info.get(f"{prefix}_balls")
+            if not name or runs_value is None or balls_value is None or name.lower().startswith("batter "):
+                continue
+            try:
+                batter_parts.append(f"{name} {int(runs_value)} off {int(balls_value)}")
+            except (TypeError, ValueError):
+                continue
+        if batter_parts:
+            score_parts.append(", ".join(batter_parts) + ".")
+        if score_parts:
+            speech = f"{speech} {' '.join(score_parts)}"
+
+    rate, pitch, volume = AUDIO_PROFILES.get(level, AUDIO_PROFILES[1])
+    event_kind = d["kind"]
+    if event_kind == "runs" and d["runs"] == 4:
+        badge = "FOUR"
+    elif event_kind == "runs" and d["runs"] >= 6:
+        badge = "SIX"
+    elif event_kind == "wicket":
+        badge = "WICKET"
+    elif event_kind == "wide":
+        badge = "WIDE"
+    elif event_kind == "noball":
+        badge = "NO BALL"
+    elif event_kind == "legbye":
+        badge = "LEG BYE"
+    elif event_kind == "bye":
+        badge = "BYE"
+    elif event_kind == "dot":
+        badge = "DOT BALL"
+    else:
+        badge = "RUNS"
+
+    return {
+        "spoken_text": " ".join(speech.split()),
+        "circle_value": token,
+        "event": event_kind,
+        "badge": badge,
+        "level": level,
+        "rate": rate,
+        "pitch": pitch,
+        "volume": volume,
+        "bowler": bowler,
+        "batter": batter,
+        "over": ball_num,
+        "should_speak": bool(token),
+    }
 
