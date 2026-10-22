@@ -30,7 +30,7 @@ except ImportError:  # REST/HTML feed remains a fallback if Chromium is unavaila
 # Import existing core modules
 from cricket_streamer import CrexParser, create_tts, get_live_matches, resolve_match_url
 from human_commentator import commentator
-from final import build_live_circle_announcement, build_live_over_summary
+from final import build_live_circle_announcement, build_live_over_summary, prepare_tts_pronunciation_text
 
 logging.basicConfig(
     level=logging.INFO,
@@ -941,11 +941,12 @@ class BroadcastHub:
             """Speak a mandatory over recap exactly once, retaining it when TTS fails."""
             recap_id = str(summary.get("id") or "")
             recap_text = _normal_space(summary.get("text") or "")
+            recap_tts_text = prepare_tts_pronunciation_text(recap_text)
             if not recap_id or not recap_text or recap_id in announced_over_ids:
                 return None
             try:
                 mp3_data = await asyncio.wait_for(
-                    tts.speak_mp3(recap_text, rate="+5%", pitch="+1Hz"),
+                    tts.speak_mp3(recap_tts_text, rate="+5%", pitch="+1Hz"),
                     timeout=4.5,
                 )
             except asyncio.TimeoutError:
@@ -1027,6 +1028,7 @@ class BroadcastHub:
                     # The producer already built this call directly from the CREX circle
                     # token. Never synthesize or fall back to the scraped commentary paragraph.
                     radio_text = _normal_space(current_event.get("radio_text") or f"Live ball {ball_over}.")
+                    radio_tts_text = _normal_space(current_event.get("tts_text") or prepare_tts_pronunciation_text(radio_text, current_event.get("ball") or {}))
                     badge = current_event.get("badge") or _source_badge(ball)
                     rate = current_event.get("rate") or "+15%"
                     pitch = current_event.get("pitch") or "+10Hz"
@@ -1044,6 +1046,7 @@ class BroadcastHub:
                         "rate": rate,
                         "pitch": pitch,
                         "radio_text_preview": radio_text[:180],
+                        "tts_text_preview": radio_tts_text[:180],
                         "circle_value": circle_token,
                         "active_striker": current_event["fresh_data"].get("striker"),
                         "active_striker_score": current_event["fresh_data"].get("striker_runs"),
@@ -1056,7 +1059,7 @@ class BroadcastHub:
                     # first, cancel old synthesis immediately instead of making the newest ball
                     # wait for a stale sentence to finish generating.
                     tts_task = asyncio.create_task(
-                        tts.speak_mp3(radio_text, rate=rate, pitch=pitch)
+                        tts.speak_mp3(radio_tts_text, rate=rate, pitch=pitch)
                     )
                     next_delivery_task = asyncio.create_task(ball_queue.get())
                     done, _ = await asyncio.wait(
@@ -1468,6 +1471,9 @@ class BroadcastHub:
                                     radio_preview = _normal_space(
                                         radio_meta.get("spoken_text") or f"Live ball {live_info['over']}."
                                     )
+                                    radio_tts_preview = _normal_space(
+                                        radio_meta.get("tts_text") or prepare_tts_pronunciation_text(radio_preview, live_info)
+                                    )
                                     event_id = latest_key
                                     radio_badge = radio_meta.get("badge") or _source_badge(latest_ball)
                                     radio_rate = radio_meta.get("rate") or "+5%"
@@ -1482,6 +1488,7 @@ class BroadcastHub:
                                         "over": live_info["over"],
                                         "circle_value": circle_token,
                                         "radio_text_preview": radio_preview[:180],
+                                        "tts_text_preview": radio_tts_preview[:180],
                                         "rate": radio_rate,
                                         "pitch": radio_pitch,
                                         "active_striker": fresh_data.get("striker"),
@@ -1495,6 +1502,7 @@ class BroadcastHub:
                                         "event_id": event_id,
                                         "version": latest_event_version,
                                         "text": radio_preview,
+                                        "speech_text": radio_tts_preview,
                                         "badge": radio_badge,
                                         "over": live_info["over"],
                                         "circle_value": circle_token,
@@ -1507,6 +1515,7 @@ class BroadcastHub:
                                         "ball": latest_ball,
                                         "fresh_data": fresh_data,
                                         "radio_text": radio_preview,
+                                        "tts_text": radio_tts_preview,
                                         "badge": radio_badge,
                                         "rate": radio_rate,
                                         "pitch": radio_pitch,

@@ -402,7 +402,7 @@
 
     try {
       const synth = window.speechSynthesis;
-      const utterance = new SpeechSynthesisUtterance(String(data.text || ""));
+      const utterance = new SpeechSynthesisUtterance(String(data.speech_text || data.text || ""));
       const voices = synth.getVoices ? synth.getVoices() : [];
       const hindiVoices = voices.filter(v => /^hi(?:-|$)/i.test(v.lang || ""));
       const preferred =
