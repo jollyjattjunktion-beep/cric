@@ -228,6 +228,63 @@ COMMON_NAMES = {
     "rahman": "रहमान", "raza": "रज़ा",
 }
 
+
+# Match-specific pronunciation overrides. These take precedence over approximate
+# letter-by-letter phonetic rules for names heard in live commentary.
+PLAYER_NAME_PRONUNCIATIONS = {
+    "dasun shanaka": "दासुन शनाका",
+    "pavan rathnayake": "पवन रथनायके",
+    "liam dawson": "लियाम डॉसन",
+    "avishka fernando": "अविश्का फर्नांडो",
+    "jamie overton": "जेमी ओवरटन",
+    "wiaan mulder": "वियान मुल्डर",
+    "beau webster": "बो वेब्स्टर",
+    "pathum nissanka": "पथुम निसांका",
+    "charith asalanka": "चरिथ असलंका",
+    "kusal mendis": "कुसल मेंडिस",
+    "kamindu mendis": "कमिंदु मेंडिस",
+    "dhananjaya de silva": "धनंजय डी सिल्वा",
+    "angelo mathews": "एंजेलो मैथ्यूज़",
+    "wanindu hasaranga": "वानिंदु हसरंगा",
+    "maheesh theekshana": "महेश थीक्षना",
+    "dilshan madushanka": "दिलशान मदुशंका",
+    "kusal perera": "कुसल परेरा",
+    "dinesh chandimal": "दिनेश चांदीमल",
+    "kamindu mendis": "कमिंदु मेंडिस",
+    "joe root": "जो रूट",
+    "ben stokes": "बेन स्टोक्स",
+    "jos buttler": "जोस बटलर",
+    "harry brook": "हैरी ब्रूक",
+    "jofra archer": "जोफ्रा आर्चर",
+    "ad il rashid": "आदिल रशीद",
+    "adil rashid": "आदिल रशीद",
+    "mark wood": "मार्क वुड",
+    "willey": "विली",
+}
+COMMON_NAMES.update({
+    "dasun": "दासुन", "shanaka": "शनाका",
+    "pavan": "पवन", "rathnayake": "रथनायके",
+    "liam": "लियाम", "dawson": "डॉसन",
+    "avishka": "अविश्का", "fernando": "फर्नांडो",
+    "jamie": "जेमी", "overton": "ओवरटन",
+    "wiaan": "वियान", "mulder": "मुल्डर",
+    "beau": "बो", "webster": "वेब्स्टर",
+    "pathum": "पथुम", "nissanka": "निसांका",
+    "charith": "चरिथ", "asalanka": "असलंका",
+    "kusal": "कुसल", "mendis": "मेंडिस",
+    "kamindu": "कमिंदु", "dhananjaya": "धनंजय",
+    "silva": "सिल्वा", "angelo": "एंजेलो",
+    "mathews": "मैथ्यूज़", "wanindu": "वानिंदु",
+    "hasaranga": "हसरंगा", "maheesh": "महेश",
+    "theekshana": "थीक्षना", "dilshan": "दिलशान",
+    "madushanka": "मदुशंका", "perera": "परेरा",
+    "chandimal": "चांदीमल", "root": "रूट",
+    "stokes": "स्टोक्स", "buttler": "बटलर",
+    "brook": "ब्रूक", "jofra": "जोफ्रा",
+    "archer": "आर्चर", "adil": "आदिल",
+    "rashid": "रशीद", "mark": "मार्क", "wood": "वुड",
+})
+
 PHONIC_RULES = (
     ("sh", "श"), ("ch", "च"), ("th", "थ"), ("ph", "फ"), ("kh", "ख"),
     ("gh", "घ"), ("bh", "भ"), ("dh", "ध"), ("jh", "झ"), ("ee", "ी"),
@@ -1422,6 +1479,99 @@ def _web_batter_score_suffix(info):
         )
     return "; ".join(players)
 
+
+def _pronunciation_context_names(context=None):
+    """Extract likely player names from delivery, matchup, and wicket metadata."""
+    if not isinstance(context, dict):
+        return []
+    names = []
+    def add(value):
+        if not isinstance(value, str):
+            return
+        value = re.sub(r"\s+", " ", value).strip(" \t\r\n,.:;")
+        if not value or len(value) < 3 or value.lower() in {
+            "batter", "batsman", "bowler", "unknown", "innings", "team"
+        }:
+            return
+        if not re.search(r"[A-Za-z]", value):
+            return
+        if value not in names:
+            names.append(value)
+
+    for key in (
+        "bowler", "batsman", "batter", "striker", "non_striker",
+        "fielder", "player", "dismissed_batter", "dismissed_player",
+    ):
+        add(context.get(key))
+
+    matchup = str(context.get("matchup") or "")
+    split = re.split(r"\s+to\s+", matchup, maxsplit=1, flags=re.IGNORECASE)
+    if len(split) == 2:
+        add(split[0])
+        add(split[1])
+
+    dismissal = (
+        context.get("last_dismissal")
+        or context.get("lastDismissal")
+        or context.get("dismissal_card")
+        or {}
+    )
+    if isinstance(dismissal, dict):
+        for key in ("batter", "batsman", "bowler", "fielder", "player", "name", "dismissed_player"):
+            add(dismissal.get(key))
+        how_out = str(dismissal.get("howOut") or dismissal.get("how_out") or "")
+    else:
+        how_out = str(dismissal or "")
+
+    # Common scorecard notations: c Fielder b Bowler; st Keeper b Bowler; b Bowler.
+    match = re.search(r"\bc\s+([A-Za-z][A-Za-z .'-]+?)\s+b\s+([A-Za-z][A-Za-z .'-]+)$", how_out, re.IGNORECASE)
+    if match:
+        add(match.group(1))
+        add(match.group(2))
+    else:
+        match = re.search(r"\bst\s+([A-Za-z][A-Za-z .'-]+?)\s+b\s+([A-Za-z][A-Za-z .'-]+)$", how_out, re.IGNORECASE)
+        if match:
+            add(match.group(1))
+            add(match.group(2))
+        else:
+            match = re.search(r"\bb\s+([A-Za-z][A-Za-z .'-]+)$", how_out, re.IGNORECASE)
+            if match:
+                add(match.group(1))
+    return sorted(names, key=len, reverse=True)
+
+
+def prepare_tts_pronunciation_text(text, context=None):
+    """Apply player-name pronunciations to TTS only; on-screen wording stays untouched."""
+    result = str(text or "")
+    names = _pronunciation_context_names(context)
+
+    # First apply full-name overrides even if the ball context wasn't available (e.g. recap).
+    for name, phonetic in sorted(PLAYER_NAME_PRONUNCIATIONS.items(), key=lambda item: len(item[0]), reverse=True):
+        pattern = r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])"
+        result = re.sub(pattern, phonetic, result, flags=re.IGNORECASE)
+
+    # Then use the supplied master phonetic dictionary for names parsed from the live card.
+    for name in names:
+        pattern = r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])"
+        if not re.search(pattern, result, flags=re.IGNORECASE):
+            continue
+        key = re.sub(r"\s+", " ", name.strip()).lower()
+        phonetic = PLAYER_NAME_PRONUNCIATIONS.get(key)
+        if not phonetic:
+            phonetic = clean_player_name_to_hindi(name)
+        if phonetic:
+            result = re.sub(pattern, phonetic, result, flags=re.IGNORECASE)
+
+    # Cover dictionary names in summaries, where only a sentence may remain.
+    for key, phonetic in sorted(COMMON_NAMES.items(), key=lambda item: len(item[0]), reverse=True):
+        if len(key) < 3:
+            continue
+        pattern = r"(?<![A-Za-z])" + re.escape(key) + r"(?![A-Za-z])"
+        result = re.sub(pattern, phonetic, result, flags=re.IGNORECASE)
+    return result
+
+
+
 def build_live_circle_announcement(ball_info, lang="hi"):
     """Build one natural current-ball call without mixed-script Hindi connectors."""
     info = ball_info or {}
@@ -1521,6 +1671,7 @@ def build_live_circle_announcement(ball_info, lang="hi"):
     rate, pitch, _volume = AUDIO_PROFILES[min(max(int(level), 1), 4)]
     return {
         "spoken_text": spoken_text,
+        "tts_text": prepare_tts_pronunciation_text(spoken_text, info),
         "source_text": "",
         "should_speak": True,
         "event": event_kind,
