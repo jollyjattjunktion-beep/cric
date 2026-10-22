@@ -738,6 +738,7 @@ class BroadcastHub:
         pending_over_indices: Dict[str, int] = {}
         announced_over_ids: set[str] = set()
         claimed_over_ids: set[str] = set()
+        seen_rendered_completion_keys: set[str] = set()
         # Snapshot from final.py's actual rendered CREX circle strip, polled separately.
         rendered_circle_state: Dict[str, Any] = {"status": "starting", "ball": None, "updated_at": 0.0}
         # Only summarize overs whose first delivery was observed after this broadcast started.
@@ -784,6 +785,38 @@ class BroadcastHub:
                     pass
             event["over_announcements"] = incoming
             ball_queue.put_nowait(event)
+
+        def register_completed_over(over_index, all_balls, score_state=None, position="after_ball", rendered_tokens=None, completion_key=""):
+            """Keep one completed-over recap pending until it has been announced."""
+            if over_index is None:
+                return False
+            score_state = score_state or last_latest_state or {}
+            team = _normal_space(score_state.get("batting_team") or last_latest_state.get("batting_team") or "innings")
+            over_id = f"{team}:{over_index}"
+            if over_id in announced_over_ids or over_id in pending_over_announcements:
+                return False
+            summary_balls = all_balls
+            if rendered_tokens:
+                summary_balls = [
+                    {
+                        "over": f"{over_index}.{idx + 1}",
+                        "circle_val": str(token).strip().upper(),
+                        "runs": str(token).strip().upper(),
+                        "matchup": "",
+                        "browser_seq": f"{completion_key}:{idx}",
+                    }
+                    for idx, token in enumerate(rendered_tokens)
+                    if str(token).strip()
+                ]
+            summary_text = _over_announcement(over_index, summary_balls, lang, score_state)
+            if not summary_text:
+                return False
+            pending_over_announcements[over_id] = summary_text
+            pending_over_indices[over_id] = over_index
+            pending_over_positions[over_id] = position
+            logger.info("Queued completed-over announcement for over %s (%s)", over_index + 1, position)
+            return True
+
         async def rendered_circle_watcher() -> None:
             """Read the live, rendered CREX circle strip using the same JS as final.py."""
             if async_playwright is None:
