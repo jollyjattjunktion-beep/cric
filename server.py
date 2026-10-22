@@ -1270,6 +1270,7 @@ class BroadcastHub:
                             if rendered_ball else 999.0
                         )
                         rendered_fresh = bool(rendered_ball and rendered_age <= 2.0)
+                        rendered_baseline_was_done = bool(rendered_circle_state.get("baseline_done"))
 
                         # The real rendered circle wins ties and outranks stale historic
                         # feed entries. HTML/API remain fallback sources when Chromium is late.
@@ -1330,6 +1331,13 @@ class BroadcastHub:
                         # current ball just because the browser watcher caught up after startup.
                         if rendered_fresh and not rendered_circle_state.get("baseline_done"):
                             rendered_circle_state["baseline_done"] = True
+                            if rendered_ball and rendered_ball.get("is_over_complete"):
+                                seed_key = f"{rendered_ball.get('over', '')}|{rendered_ball.get('browser_seq', '')}|{rendered_ball.get('circle_val', '')}"
+                                seen_rendered_completion_keys.add(seed_key)
+                                seed_over = _ball_over_index(rendered_ball)
+                                if seed_over is not None:
+                                    seed_team = _normal_space(fresh_data.get("batting_team") or "innings")
+                                    announced_over_ids.add(f"{seed_team}:{seed_over}")
                             if last_latest_key is not None and _ball_order(rendered_ball) > _ball_order(last_latest_ball or {}):
                                 last_latest_key = _ball_identity(rendered_ball)
                                 last_latest_ball = rendered_ball
