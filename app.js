@@ -796,6 +796,14 @@
 
   btnStop.addEventListener("click", async () => {
     btnStop.disabled = true;
+    if (instantFallbackTimer) {
+      clearTimeout(instantFallbackTimer);
+      instantFallbackTimer = null;
+    }
+    cancelBrowserSpeech();
+    if (audioPlayer) {
+      try { audioPlayer.pause(); audioPlayer.currentTime = 0; } catch (_) {}
+    }
     try {
       await fetch("/api/stop", { method: "POST" });
     } catch (e) {
@@ -806,16 +814,24 @@
   btnAudioToggle.addEventListener("click", () => {
     isAudioMuted = !isAudioMuted;
     if (isAudioMuted) {
-      audioPlayer.muted = true;
+      if (instantFallbackTimer) {
+        clearTimeout(instantFallbackTimer);
+        instantFallbackTimer = null;
+      }
+      cancelBrowserSpeech();
+      if (audioPlayer) {
+        audioPlayer.pause();
+        audioPlayer.muted = true;
+      }
       audioIcon.textContent = "🔇";
       audioText.textContent = "Unmute Audio";
       playerStateText.textContent = "Audio muted by user";
     } else {
-      audioPlayer.muted = false;
+      if (audioPlayer) audioPlayer.muted = false;
       audioIcon.textContent = "🔊";
       audioText.textContent = "Mute Audio";
-      playerStateText.textContent = "Live audio streaming enabled";
-      audioPlayer.play().catch(() => {});
+      playerStateText.textContent = "Audio unmuted; next new ball will play (no replay).";
+      // Do not call play() here: unmuting must not replay the previous ball.
     }
   });
 
