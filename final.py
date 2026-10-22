@@ -1414,7 +1414,7 @@ def _web_batter_score_suffix(info):
     for prefix in ("striker", "non_striker"):
         name = str(info.get(prefix) or "").strip()
         runs = _coerce_score_int(info.get(f"{prefix}_runs"))
-        balls = _safe_int(info.get(f"{prefix}_balls"))
+        balls = _coerce_score_int(info.get(f"{prefix}_balls"))
         if not name or runs is None or balls is None or name.lower().startswith("batter "):
             continue
         players.append(
@@ -1442,8 +1442,8 @@ def build_live_circle_announcement(ball_info, lang="hi"):
         if kind == "wicket":
             card = dismissal or {}
             batter_name = str(card.get("batter") or card.get("batsman") or batsman or "बल्लेबाज़").strip()
-            batter_runs = _safe_int(card.get("runs"))
-            batter_balls = _safe_int(card.get("balls"))
+            batter_runs = _coerce_score_int(card.get("runs"))
+            batter_balls = _coerce_score_int(card.get("balls"))
             score_line = ""
             if batter_runs is not None and batter_balls is not None:
                 score_line = (
@@ -1454,8 +1454,8 @@ def build_live_circle_announcement(ball_info, lang="hi"):
                 f"{phrase}, विकेट! विकेट! {batter_name}{score_line} पवेलियन लौट रहे हैं। "
                 f"{_hinglish_dismissal_line(card.get('howOut', card.get('how_out', '')), bowler)}"
             )
-            score_runs = _safe_int(info.get("total_runs"))
-            score_wickets = _safe_int(info.get("total_wickets"))
+            score_runs = _coerce_score_int(info.get("total_runs"))
+            score_wickets = _coerce_score_int(info.get("total_wickets"))
             if score_runs is not None and score_wickets is not None:
                 spoken_text += (
                     f" स्कोर अब {number_to_hindi_words(score_runs)} रन, "
@@ -1502,8 +1502,8 @@ def build_live_circle_announcement(ball_info, lang="hi"):
     else:
         spoken_text, level = generate_circle_ball_commentary(over_label, token, bowler, batsman, dismissal)
         if kind == "wicket":
-            score_runs = _safe_int(info.get("total_runs"))
-            score_wickets = _safe_int(info.get("total_wickets"))
+            score_runs = _coerce_score_int(info.get("total_runs"))
+            score_wickets = _coerce_score_int(info.get("total_wickets"))
             if score_runs is not None and score_wickets is not None:
                 spoken_text += (
                     f" स्कोर अब {number_to_hindi_words(score_runs)} रन, "
@@ -1555,8 +1555,8 @@ def build_live_over_summary(over_index, balls, score_state=None, lang="hinglish"
     if stats.get("legal", 0) < 6:
         return ""
     score_state = score_state or {}
-    score_runs = _safe_int(score_state.get("total_runs"))
-    score_wickets = _safe_int(score_state.get("total_wickets"))
+    score_runs = _coerce_score_int(score_state.get("total_runs"))
+    score_wickets = _coerce_score_int(score_state.get("total_wickets"))
     try:
         spoken_over = int(over_index) + 1
     except (TypeError, ValueError):
@@ -1595,7 +1595,7 @@ def build_live_over_summary(over_index, balls, score_state=None, lang="hinglish"
         )
         crr = score_runs / max(spoken_over, 1)
         crr_text = _numbers_as_hindi_words(f"{crr:.2f}")
-        high, mid = _rr_thresholds(_safe_int(score_state.get("match_overs")))
+        high, mid = _rr_thresholds(_coerce_score_int(score_state.get("match_overs")))
         if crr >= high:
             parts.append(f"रन रेट {crr_text} प्रति ओवर है, रन बनाने की रफ्तार शानदार है।")
         elif crr >= mid:
