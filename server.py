@@ -8,6 +8,7 @@ import os
 import json
 import html
 import base64
+import io
 import asyncio
 import logging
 import re
@@ -28,7 +29,8 @@ except ImportError:  # REST/HTML feed remains a fallback if Chromium is unavaila
 
 # Import existing core modules
 from cricket_streamer import CrexParser, create_tts, get_live_matches, resolve_match_url
-from human_commentator import build_live_circle_announcement, build_live_over_summary, commentator
+from human_commentator import commentator
+from final import build_live_circle_announcement, build_live_over_summary
 
 logging.basicConfig(
     level=logging.INFO,
@@ -478,6 +480,18 @@ def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str, 
     return build_live_over_summary(over_index, rows, score_state=score_state, lang=lang)
 
 
+def _audio_duration_seconds(mp3_data: bytes) -> float:
+    """Decode the MP3 length so commentary state covers the complete spoken clip."""
+    if not mp3_data:
+        return 0.0
+    try:
+        from pydub import AudioSegment
+        audio = AudioSegment.from_file(io.BytesIO(mp3_data), format="mp3")
+        return max(0.6, len(audio) / 1000.0)
+    except Exception as exc:
+        logger.debug("MP3 duration decode failed; using conservative byte estimate: %s", exc)
+        return max(1.2, len(mp3_data) * 8.0 / 48000.0)
+
 def _source_badge(ball: Dict[str, Any]) -> str:
     token = _normal_space((ball.get("circle_val") or ball.get("runs"))).upper().replace(" ", "")
     if token in {"W", "WKT", "OUT"} or "WICKET" in token:
@@ -700,6 +714,8 @@ class BroadcastHub:
         last_latest_state: Dict[str, Any] = {}
         latest_event_version = 0
         pending_over_announcements: Dict[str, str] = {}
+        pending_over_positions: Dict[str, str] = {}
+        pending_over_indices: Dict[str, int] = {}
         announced_over_ids: set[str] = set()
         claimed_over_ids: set[str] = set()
         # Snapshot from final.py's actual rendered CREX circle strip, polled separately.
@@ -708,25 +724,46 @@ class BroadcastHub:
         tracked_full_overs: set[int] = set()
 
         async def queue_latest(event: Dict[str, Any]) -> None:
-            """Keep only the newest ball and transfer a one-shot recap if a queued event is replaced."""
+            """Keep one waiting delivery while carrying all unspoken over recaps forward."""
+            ball = event.get("ball") or {}
+            next_over = _ball_over_index(ball)
+            incoming = list(event.get("over_announcements", []))
+            incoming_ids = {item.get("id") for item in incoming if item.get("id")}
+            for recap_id, recap_text in pending_over_announcements.items():
+                if recap_id in announced_over_ids or recap_id in incoming_ids:
+                    continue
+                recap_over = pending_over_indices.get(recap_id)
+                position = pending_over_positions.get(recap_id, "after_ball")
+                if next_over is not None and recap_over is not None and next_over > recap_over:
+                    position = "before_ball"
+                    pending_over_positions[recap_id] = position
+                incoming.append({"id": recap_id, "text": recap_text, "position": position, "over_index": recap_over})
+                incoming_ids.add(recap_id)
+                claimed_over_ids.add(recap_id)
             if ball_queue.full():
                 try:
                     dropped = ball_queue.get_nowait()
-                    incoming = list(event.get("over_announcements", []))
-                    incoming_ids = {item.get("id") for item in incoming}
                     for recap in dropped.get("over_announcements", []):
                         recap_id = recap.get("id")
-                        if recap_id and recap_id not in incoming_ids and recap_id not in announced_over_ids:
-                            incoming.append(recap)
-                            incoming_ids.add(recap_id)
-                    event["over_announcements"] = incoming
-                    logger.info("Discarding queued stale ball %s; prioritizing %s",
+                        if not recap_id or recap_id in announced_over_ids or recap_id in incoming_ids:
+                            continue
+                        recap_text = recap.get("text") or pending_over_announcements.get(recap_id, "")
+                        if not recap_text:
+                            continue
+                        recap_over = pending_over_indices.get(recap_id, recap.get("over_index"))
+                        position = pending_over_positions.get(recap_id, recap.get("position", "after_ball"))
+                        if next_over is not None and recap_over is not None and next_over > recap_over:
+                            position = "before_ball"
+                            pending_over_positions[recap_id] = position
+                        incoming.append({"id": recap_id, "text": recap_text, "position": position, "over_index": recap_over})
+                        incoming_ids.add(recap_id)
+                    logger.info("Discarding waiting ball %s; prioritizing %s",
                                 _normal_space(dropped.get("ball", {}).get("over")),
-                                _normal_space(event.get("ball", {}).get("over")))
+                                _normal_space(ball.get("over")))
                 except asyncio.QueueEmpty:
                     pass
+            event["over_announcements"] = incoming
             ball_queue.put_nowait(event)
-
         async def rendered_circle_watcher() -> None:
             """Read the live, rendered CREX circle strip using the same JS as final.py."""
             if async_playwright is None:
@@ -819,8 +856,7 @@ class BroadcastHub:
             if not mp3_data:
                 logger.warning("TTS returned empty audio for event type %s", kind)
                 return None
-            bytes_per_second = 6000.0 if tts_provider == "edge" else 16000.0
-            duration = max(0.9, len(mp3_data) / bytes_per_second)
+            duration = _audio_duration_seconds(mp3_data)
             audio_url = "data:audio/mpeg;base64," + base64.b64encode(mp3_data).decode("ascii")
             self.latest_commentary = text
             await self.broadcast_ws("commentary", {
@@ -846,6 +882,36 @@ class BroadcastHub:
                 return None
             return await broadcast_audio_bytes(text, badge, mp3_data, kind)
 
+        async def speak_over_summary(summary: Dict[str, Any]) -> Optional[float]:
+            """Speak a mandatory over recap exactly once, retaining it when TTS fails."""
+            recap_id = str(summary.get("id") or "")
+            recap_text = _normal_space(summary.get("text") or "")
+            if not recap_id or not recap_text or recap_id in announced_over_ids:
+                return None
+            try:
+                mp3_data = await asyncio.wait_for(
+                    tts.speak_mp3(recap_text, rate="+5%", pitch="+0Hz"),
+                    timeout=4.5,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("Over recap %s TTS timed out; retaining it for retry", recap_id)
+                claimed_over_ids.discard(recap_id)
+                return None
+            if not mp3_data:
+                logger.warning("Over recap %s returned empty audio; retaining it for retry", recap_id)
+                claimed_over_ids.discard(recap_id)
+                return None
+            duration = await broadcast_audio_bytes(recap_text, "OVER COMPLETE", mp3_data, "over_summary")
+            if duration is None:
+                claimed_over_ids.discard(recap_id)
+                return None
+            announced_over_ids.add(recap_id)
+            pending_over_announcements.pop(recap_id, None)
+            pending_over_positions.pop(recap_id, None)
+            pending_over_indices.pop(recap_id, None)
+            claimed_over_ids.discard(recap_id)
+            await asyncio.sleep(duration + 0.12)
+            return duration
         async def voice_worker():
             """Speak pending over summaries and the single newest delivery, never a ball backlog."""
             event: Optional[Dict[str, Any]] = None
@@ -860,20 +926,35 @@ class BroadcastHub:
 
                 current_event, event = event, None
                 try:
-                    # Keep summaries attached to the event, but never speak one before its ball.
-                    # A recap must not make a fresh delivery wait or cause it to be discarded.
-                    summaries_after_ball = current_event.get("over_announcements", [])
+                    # Keep over recaps durable until successfully broadcast.
+                    summary_map = {
+                        str(item.get("id")): dict(item)
+                        for item in current_event.get("over_announcements", []) if item.get("id")
+                    }
+                    current_ball_index = _ball_over_index(current_event.get("ball", {}))
+                    for recap_id, recap_text in pending_over_announcements.items():
+                        if recap_id in announced_over_ids:
+                            continue
+                        recap_over = pending_over_indices.get(recap_id)
+                        position = pending_over_positions.get(recap_id, "after_ball")
+                        if current_ball_index is not None and recap_over is not None and current_ball_index > recap_over:
+                            position = "before_ball"
+                            pending_over_positions[recap_id] = position
+                        summary_map.setdefault(recap_id, {"id": recap_id, "text": recap_text, "position": position, "over_index": recap_over})
+                    summaries_before_ball = [item for item in summary_map.values() if item.get("position") == "before_ball"]
+                    summaries_after_ball = [item for item in summary_map.values() if item.get("position") != "before_ball"]
+                    # Over-end call must be heard before any ball from the next over.
+                    for summary in summaries_before_ball:
+                        await speak_over_summary(summary)
 
                     # New source delivery arrived while a TTS call was running.
                     # Drop this old ball; the next queue item carries the newest one.
                     if current_event["version"] != latest_event_version:
-                        # A recap attached to a stale queue item must not be re-attached
-                        # and announced over and over on every following delivery.
+                        # A stale waiting delivery must not consume its recap.
                         for summary in summaries_after_ball:
-                            over_id = summary.get("id")
-                            if over_id:
-                                announced_over_ids.add(over_id)
-                                pending_over_announcements.pop(over_id, None)
+                            recap_id = summary.get("id")
+                            if recap_id and recap_id not in announced_over_ids:
+                                claimed_over_ids.discard(recap_id)
                         logger.info(
                             "Dropping stale delivery %s and marking its attached over recaps handled",
                             current_event.get("ball", {}).get("over"),
@@ -938,13 +1019,11 @@ class BroadcastHub:
                         if not next_delivery_task.done():
                             next_delivery_task.cancel()
                         await asyncio.gather(tts_task, next_delivery_task, return_exceptions=True)
-                        # A recap tied to this stale ball is consumed and must never be
-                        # regenerated onto every following ball.
+                        # Retain recaps in the pending registry; the newest ball will inherit them.
                         for recap in summaries_after_ball:
                             recap_id = recap.get("id")
-                            if recap_id:
-                                announced_over_ids.add(recap_id)
-                                pending_over_announcements.pop(recap_id, None)
+                            if recap_id and recap_id not in announced_over_ids:
+                                claimed_over_ids.discard(recap_id)
                         # Do not overwrite the newer ball's queue/debug state with
                         # diagnostics from a cancelled stale synthesis.
                         if (
@@ -1006,13 +1085,12 @@ class BroadcastHub:
                         logger.info("TTS completed for old ball %s; discarding audio before broadcast", ball_over)
                         continue
 
-                    # Edge TTS returns 48-kbit/s MP3; Sarvam's MP3 export is 128-kbit/s.
-                    bytes_per_second = 6000.0 if tts_provider == "edge" else 16000.0
-                    duration = max(0.9, len(mp3_data) / bytes_per_second)
+                    duration = _audio_duration_seconds(mp3_data)
                     audio_url = "data:audio/mpeg;base64," + base64.b64encode(mp3_data).decode("ascii")
                     self.latest_commentary = radio_text
                     await self.broadcast_ws("commentary", {
                         "event_id": current_event.get("event_id") or f"{ball_over}|{circle_token}",
+                        "version": current_event.get("version", 0),
                         "text": radio_text,
                         "badge": badge,
                         "over": ball_over,
@@ -1038,78 +1116,13 @@ class BroadcastHub:
                     except asyncio.TimeoutError:
                         event = None
 
-                    # Only attempt an over recap after the current delivery has been
-                    # sent and its short clip has had time to play. If a new ball arrived,
-                    # keep it first and leave the recap for a later quiet period.
+                    # Recaps after a completed final ball are mandatory. If a new ball arrives
+                    # first, its event inherits the still-pending recap and worker ordering handles it.
                     if event is None and summaries_after_ball:
                         for summary in summaries_after_ball:
-                            if current_event["version"] != latest_event_version:
-                                break
-                            over_id = summary["id"]
-                            if over_id in announced_over_ids:
+                            if summary.get("id") in announced_over_ids:
                                 continue
-
-                            # Synthesize an over recap concurrently with waiting for the next
-                            # delivery. A new circle always wins; the recap is cancelled rather
-                            # than holding up the next ball.
-                            recap_task = asyncio.create_task(
-                                tts.speak_mp3(summary["text"], rate="+5%", pitch="+0Hz")
-                            )
-                            next_ball_task = asyncio.create_task(ball_queue.get())
-                            recap_done, _ = await asyncio.wait(
-                                {recap_task, next_ball_task},
-                                timeout=4.5,
-                                return_when=asyncio.FIRST_COMPLETED,
-                            )
-                            if next_ball_task in recap_done:
-                                event = next_ball_task.result()
-                                # Drop this recap once interrupted by a newer live ball.
-                                # Keeping it pending caused the same old-over sentence to
-                                # be attached to every later ball and repeated indefinitely.
-                                announced_over_ids.add(over_id)
-                                pending_over_announcements.pop(over_id, None)
-                                if not recap_task.done():
-                                    recap_task.cancel()
-                                await asyncio.gather(recap_task, return_exceptions=True)
-                                logger.info("Skipping interrupted over recap %s; it will not repeat", over_id)
-                                break
-                            if recap_task not in recap_done:
-                                if not recap_task.done():
-                                    recap_task.cancel()
-                                if not next_ball_task.done():
-                                    next_ball_task.cancel()
-                                await asyncio.gather(recap_task, next_ball_task, return_exceptions=True)
-                                announced_over_ids.add(over_id)
-                                pending_over_announcements.pop(over_id, None)
-                                logger.warning("Over recap timed out; marking it handled so it cannot repeat")
-                                continue
-                            if not next_ball_task.done():
-                                next_ball_task.cancel()
-                                await asyncio.gather(next_ball_task, return_exceptions=True)
-
-                            recap_mp3 = recap_task.result()
-                            if current_event["version"] != latest_event_version or not recap_mp3:
-                                announced_over_ids.add(over_id)
-                                pending_over_announcements.pop(over_id, None)
-                                event = None
-                                break
-
-                            # Claim this over before broadcasting so copied queue events
-                            # cannot trigger a duplicate recap.
-                            announced_over_ids.add(over_id)
-                            pending_over_announcements.pop(over_id, None)
-                            recap_duration = await broadcast_audio_bytes(
-                                summary["text"], "OVER COMPLETE", recap_mp3, "over_summary"
-                            )
-                            if recap_duration is None:
-                                continue
-                            try:
-                                event = await asyncio.wait_for(ball_queue.get(), timeout=recap_duration)
-                            except asyncio.TimeoutError:
-                                event = None
-                            if event is not None:
-                                break
-
+                            await speak_over_summary(summary)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
@@ -1335,6 +1348,8 @@ class BroadcastHub:
                                         summary_text = _over_announcement(old_over, raw_balls, lang, fresh_data)
                                         if summary_text:
                                             pending_over_announcements[over_id] = summary_text
+                                            pending_over_indices[over_id] = old_over
+                                            pending_over_positions[over_id] = "before_ball"
                                             logger.info("Queued completed-over announcement for over %s", old_over + 1)
 
                                 # Ignore a stale/backwards page snapshot rather than speaking it.
@@ -1347,11 +1362,15 @@ class BroadcastHub:
                                     # the same completed-over sentence to repeat on subsequent balls.
                                     pending_summaries = []
                                     for over_id, summary in list(pending_over_announcements.items()):
-                                        if over_id in announced_over_ids or over_id in claimed_over_ids:
+                                        if over_id in announced_over_ids:
                                             continue
-                                        pending_summaries.append({"id": over_id, "text": summary})
+                                        summary_over = pending_over_indices.get(over_id)
+                                        position = pending_over_positions.get(over_id, "after_ball")
+                                        if new_over is not None and summary_over is not None and new_over > summary_over:
+                                            position = "before_ball"
+                                            pending_over_positions[over_id] = position
+                                        pending_summaries.append({"id": over_id, "text": summary, "position": position, "over_index": summary_over})
                                         claimed_over_ids.add(over_id)
-                                        pending_over_announcements.pop(over_id, None)
                                     # Generate the manual circle call immediately at detection,
                                     # publish its text now, then synthesize audio asynchronously.
                                     circle_token = _normal_space(
@@ -1372,8 +1391,8 @@ class BroadcastHub:
                                     )
                                     event_id = latest_key
                                     radio_badge = radio_meta.get("badge") or _source_badge(latest_ball)
-                                    radio_rate = radio_meta.get("rate") or "+15%"
-                                    radio_pitch = radio_meta.get("pitch") or "+10Hz"
+                                    radio_rate = radio_meta.get("rate") or "+5%"
+                                    radio_pitch = radio_meta.get("pitch") or "+1Hz"
 
                                     self.latest_commentary = radio_preview
                                     self.latest_tts_debug = {
@@ -1395,12 +1414,13 @@ class BroadcastHub:
                                     }
                                     await self.broadcast_ws("commentary_preview", {
                                         "event_id": event_id,
+                                        "version": latest_event_version,
                                         "text": radio_preview,
                                         "badge": radio_badge,
                                         "over": live_info["over"],
                                         "circle_value": circle_token,
                                         "status": "preparing_audio",
-                                        "voice_fallback_after_ms": 900,
+                                        "voice_fallback_after_ms": 1300,
                                     })
                                     await queue_latest({
                                         "version": latest_event_version,

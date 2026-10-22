@@ -78,10 +78,11 @@ BLOCKED_URL_PATTERNS = (
 
 # Voice delivery per excitement level: (rate, pitch, volume)
 AUDIO_PROFILES = {
-    1: ("+15%", "+10Hz", "+0%"),    # Level 1 (Dot balls): Normal speaking volume
-    2: ("+20%", "+12Hz", "+15%"),   # Level 2 (Singles/Extras): Slightly louder
-    3: ("+25%", "+15Hz", "+35%"),   # Level 3 (Fours): Loud and punchy
-    4: ("+30%", "+20Hz", "+60%"),   # Level 4 (Sixes/Wickets): Shouting over the crowd
+    # Conversational Madhur delivery with restrained emphasis.
+    1: ("+3%",  "+0Hz", "+0%"),
+    2: ("+5%",  "+1Hz", "+5%"),
+    3: ("+8%",  "+2Hz", "+10%"),
+    4: ("+10%", "+3Hz", "+18%"),
 }
 
 log = logging.getLogger("crex_radio")
@@ -1315,6 +1316,182 @@ def main() -> None:
     except Exception:
         traceback.print_exc()
         input("\nPress ENTER to close...")
+
+
+# WEB-APP COMPATIBILITY ADAPTER
+# The Pro Commentary functions above are kept intact. This adapter
+# lets server.py call the same circle-driven scripts over WebSocket.
+# ============================================================
+def _web_circle_value(info):
+    value = info.get("circle_val")
+    if value is None or str(value).strip() == "":
+        value = info.get("runs", "")
+    return "" if value is None else str(value).strip().upper()
+
+
+def _web_ball_names(info):
+    matchup = str(info.get("matchup") or "").strip()
+    bowler = str(info.get("bowler") or "").strip()
+    batsman = str(info.get("batsman") or info.get("striker") or "").strip()
+    parts = re.split(r"\s+to\s+", matchup, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) == 2:
+        bowler = parts[0].strip(" ,:.") or bowler
+        batsman = parts[1].strip(" ,:.") or batsman
+    elif "," in matchup:
+        left, right = matchup.split(",", 1)
+        bowler = left.strip(" ,:.") or bowler
+        batsman = re.sub(r"\s*(?:को|to)\s*$", "", right.strip(" ,:."), flags=re.IGNORECASE) or batsman
+    return bowler, batsman
+
+
+def _web_batter_score_suffix(info):
+    """Only used at over end or wicket—not spoken after every delivery."""
+    players = []
+    for prefix in ("striker", "non_striker"):
+        name = str(info.get(prefix) or "").strip()
+        runs = info.get(f"{prefix}_runs")
+        balls = info.get(f"{prefix}_balls")
+        if not name or runs is None or balls is None or name.lower().startswith("batter "):
+            continue
+        try:
+            players.append(f"{name} {int(runs)} off {int(balls)}")
+        except (TypeError, ValueError):
+            continue
+    return ", ".join(players)
+
+
+def build_live_circle_announcement(ball_info, lang="hi"):
+    """Use the uploaded final.py manual scripts; never speak CREX source prose."""
+    info = ball_info or {}
+    token = _web_circle_value(info)
+    if not token:
+        return {"should_speak": False}
+
+    over_label = str(info.get("over") or info.get("ball") or "").strip()
+    bowler, batsman = _web_ball_names(info)
+    dismissal = (
+        info.get("last_dismissal")
+        or info.get("lastDismissal")
+        or info.get("dismissal_card")
+        or None
+    )
+
+    spoken_text, level = generate_circle_ball_commentary(
+        over_label, token, bowler, batsman, dismissal
+    )
+    delivery = classify_delivery(token)
+    kind = delivery["kind"]
+    circle_runs = int(delivery.get("runs", 0) or 0) if kind == "runs" else 0
+    if kind == "runs" and circle_runs == 4:
+        event_kind = "four"
+    elif kind == "runs" and circle_runs == 6:
+        event_kind = "six"
+    else:
+        event_kind = kind
+
+    # Team score is deliberately announced only on a wicket. Routine balls stay short.
+    if kind == "wicket":
+        runs = info.get("total_runs")
+        wickets = info.get("total_wickets")
+        try:
+            spoken_text += f" Score {int(runs)} for {int(wickets)}."
+        except (TypeError, ValueError):
+            pass
+        batter_suffix = _web_batter_score_suffix(info)
+        if batter_suffix:
+            spoken_text += " " + batter_suffix + "."
+
+    badges = {
+        "dot": "DOT BALL",
+        "runs": "RUNS",
+        "four": "FOUR",
+        "six": "SIX",
+        "wide": "WIDE",
+        "noball": "NO BALL",
+        "legbye": "LEG BYE",
+        "bye": "BYE",
+        "wicket": "WICKET",
+    }
+    rate, pitch, _volume = AUDIO_PROFILES[min(max(int(level), 1), 4)]
+    return {
+        "spoken_text": spoken_text,
+        "source_text": "",
+        "should_speak": True,
+        "event": event_kind,
+        "badge": badges.get(event_kind, badges.get(kind, "BALL")),
+        "level": level,
+        "rate": rate,
+        "pitch": pitch,
+        "circle_value": token,
+        "over": over_label,
+    }
+
+
+def build_live_over_summary(over_index, balls, score_state=None, lang="hinglish"):
+    """Use the attached Pro Commentary over recap and speak score at over end only."""
+    unique = []
+    seen = set()
+    for ball in balls or []:
+        if not isinstance(ball, dict):
+            continue
+        raw_token = ball.get("circle_val")
+        if raw_token is None or str(raw_token).strip() == "":
+            raw_token = ball.get("runs")
+        token = "" if raw_token is None else str(raw_token).strip().upper()
+        over = str(ball.get("over") or "").strip()
+        key = (over, token, str(ball.get("matchup") or "").strip().lower())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(token)
+
+    stats = over_stats_from_tokens(unique)
+    score_state = score_state or {}
+    total_runs = score_state.get("total_runs")
+    total_wickets = score_state.get("total_wickets")
+    try:
+        spoken_over = int(over_index) + 1
+    except (TypeError, ValueError):
+        spoken_over = 1
+
+    # The source function owns the manual score phrasing; pass team score here,
+    # not each ball's score, so score is spoken only at over completion.
+    summary = build_over_summary(
+        spoken_over,
+        total_runs if total_runs is not None else 0,
+        total_wickets if total_wickets is not None else 0,
+        stats,
+        None,
+    )
+    batter_suffix = _web_batter_score_suffix(score_state)
+    if batter_suffix:
+        summary += " Batters: " + batter_suffix + "."
+    return summary
+
+
+class _WebCommentatorAdapter:
+    """Thin compatibility layer for server.py; reuses the uploaded Pro scripts."""
+    def classify(self, text="", runs=""):
+        token = str(runs or "").strip().upper()
+        delivery = classify_delivery(token)
+        level = 4 if delivery["kind"] == "wicket" or token == "6" else 3 if token == "4" else 2 if delivery["kind"] not in ("dot",) else 1
+        rate, pitch, _volume = AUDIO_PROFILES[level]
+        return {
+            "event": delivery["kind"],
+            "badge": delivery["kind"].upper(),
+            "rate": rate,
+            "pitch": pitch,
+            "should_speak": bool(token),
+        }
+
+    def humanize(self, raw_text="", ball_info=None, lang="hi", gemini_api_key=None):
+        return build_live_circle_announcement(ball_info or {}, lang=lang)
+
+    async def humanize_async(self, raw_text="", ball_info=None, lang="hi", gemini_api_key=None):
+        return self.humanize(raw_text, ball_info=ball_info, lang=lang, gemini_api_key=gemini_api_key)
+
+
+commentator = _WebCommentatorAdapter()
 
 
 if __name__ == "__main__":

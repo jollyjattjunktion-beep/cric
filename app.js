@@ -366,6 +366,9 @@
   let instantFallbackTimer = null;
   let currentPreviewEventId = "";
   let activeBrowserUtterance = null;
+  let activePlaybackEventId = "";
+  let pendingBallEvent = null;
+  const pendingOverSummaries = [];
   const spokenEventIds = new Set();
   const browserFallbackEventIds = new Set();
 
@@ -425,6 +428,8 @@
       rememberEvent(spokenEventIds, key);
       rememberEvent(browserFallbackEventIds, key);
       activeBrowserUtterance = utterance;
+      activeBrowserUtterance.__preetEventKey = key;
+      activePlaybackEventId = key;
 
       utterance.onstart = () => {
         if (currentPreviewEventId !== key) return;
@@ -438,11 +443,12 @@
       };
       utterance.onend = () => {
         if (activeBrowserUtterance === utterance) activeBrowserUtterance = null;
-        if (currentPreviewEventId === key) setTalkingState(false);
+        finishPlayback(key);
       };
       utterance.onerror = () => {
         if (activeBrowserUtterance === utterance) activeBrowserUtterance = null;
-        playerStateText.textContent = "Browser voice fallback failed; check browser audio permissions.";
+        playerStateText.textContent = "Browser voice fallback failed; check browser audio permissions."; 
+        finishPlayback(key);
       };
 
       synth.speak(utterance);
@@ -453,88 +459,121 @@
     }
   }
 
+  function eventVersion(data) {
+    const value = Number(data && data.version);
+    return Number.isFinite(value) ? value : 0;
+  }
+
+  function isOverSummary(data) {
+    return !!data && (data.kind === "over_summary" || /OVER COMPLETE/i.test(String(data.badge || "")));
+  }
+
+  function playbackIsActive() {
+    return !!activePlaybackEventId || !!activeBrowserUtterance ||
+      !!(audioPlayer && !audioPlayer.paused && !audioPlayer.ended);
+  }
+
+  function enqueueLatestBall(kind, data) {
+    if (!data) return;
+    const key = commentaryEventId(data);
+    const version = eventVersion(data);
+    const candidate = { kind, data, key, version };
+    if (!pendingBallEvent || version > pendingBallEvent.version ||
+        (version === pendingBallEvent.version && key === pendingBallEvent.key && kind === "commentary" && pendingBallEvent.kind === "preview") ||
+        (version === 0 && pendingBallEvent.version === 0 && key !== pendingBallEvent.key)) {
+      pendingBallEvent = candidate;
+    }
+  }
+
+  function enqueueOverSummary(data) {
+    if (!data) return;
+    const key = commentaryEventId(data);
+    if (spokenEventIds.has(key) || pendingOverSummaries.some(item => commentaryEventId(item) === key)) return;
+    pendingOverSummaries.push(data);
+  }
+
+  function finishPlayback(key) {
+    if (activePlaybackEventId !== key) return;
+    activePlaybackEventId = "";
+    if (activeBrowserUtterance && activeBrowserUtterance.__preetEventKey === key) activeBrowserUtterance = null;
+    if (commentaryTimeout) { clearTimeout(commentaryTimeout); commentaryTimeout = null; }
+    if (currentPreviewEventId === key) setTalkingState(false);
+    drainPendingPlayback();
+  }
+
+  function drainPendingPlayback() {
+    if (playbackIsActive()) return;
+    if (pendingOverSummaries.length) {
+      handleCommentary(pendingOverSummaries.shift());
+      return;
+    }
+    if (!pendingBallEvent) return;
+    const pending = pendingBallEvent;
+    pendingBallEvent = null;
+    if (pending.kind === "commentary") handleCommentary(pending.data);
+    else handleCommentaryPreview(pending.data);
+  }
+
   function handleCommentaryPreview(data) {
     if (!data) return;
     const key = commentaryEventId(data);
-
-    // Same circle snapshot can be re-sent during refresh; do not restart/repeat it.
-    if (key === currentPreviewEventId && spokenEventIds.has(key)) return;
-
-    if (instantFallbackTimer) {
-      clearTimeout(instantFallbackTimer);
-      instantFallbackTimer = null;
+    if (spokenEventIds.has(key)) return;
+    if (playbackIsActive() && activePlaybackEventId !== key) {
+      enqueueLatestBall("preview", data);
+      playerStateText.textContent = "Finishing the current announcement; newest ball is waiting.";
+      return;
     }
-    if (commentaryTimeout) {
-      clearTimeout(commentaryTimeout);
-      commentaryTimeout = null;
+    if (pendingOverSummaries.length && !playbackIsActive()) {
+      enqueueLatestBall("preview", data);
+      drainPendingPlayback();
+      return;
     }
-
+    if (instantFallbackTimer) { clearTimeout(instantFallbackTimer); instantFallbackTimer = null; }
+    if (commentaryTimeout) { clearTimeout(commentaryTimeout); commentaryTimeout = null; }
     currentPreviewEventId = key;
-    cancelBrowserSpeech();
-
-    // Update visible text immediately, before Edge returns a complete MP3.
     speakingText.textContent = '"' + (data.text || "New delivery detected.") + '"';
     onAirBadge.className = "on-air-badge waiting";
     onAirText.textContent = (data.badge || "NEW BALL") + " • PREPARING AUDIO";
     waveform.className = "waveform";
-    playerStateText.textContent = "Preparing Madhur audio for " + (data.over || "the latest ball") +
-      " [" + (data.circle_value || "?") + "]...";
-
-    if (audioPlayer) {
-      try {
-        audioPlayer.pause();
-        audioPlayer.currentTime = 0;
-        audioPlayer.removeAttribute("src");
-        audioPlayer.load();
-      } catch (_) {}
-    }
-
-    // Edge Madhur is preferred. If it has not returned in about a second, speak
-    // the same current-ball line using the best installed browser Hindi voice.
-    const waitMs = Number(data.voice_fallback_after_ms) || 900;
-    if (!isAudioMuted && !spokenEventIds.has(key)) {
+    playerStateText.textContent = "Preparing Madhur audio for " + (data.over || "the latest ball") + " [" + (data.circle_value || "?") + "]...";
+    const waitMs = Number(data.voice_fallback_after_ms) || 1300;
+    if (!isAudioMuted) {
       instantFallbackTimer = setTimeout(() => {
         instantFallbackTimer = null;
-        if (currentPreviewEventId === key && !spokenEventIds.has(key)) {
-          speakInstantBrowserFallback(data, key);
-        }
-      }, Math.max(500, Math.min(waitMs, 1500)));
+        if (spokenEventIds.has(key)) return;
+        if (playbackIsActive() && activePlaybackEventId !== key) { enqueueLatestBall('preview', data); return; }
+        if (currentPreviewEventId === key) speakInstantBrowserFallback(data, key);
+      }, Math.max(500, Math.min(waitMs, 1800)));
     }
   }
 
   function handleCommentary(data) {
     if (!data) return;
     const key = commentaryEventId(data);
-
-    if (instantFallbackTimer && key === currentPreviewEventId) {
-      clearTimeout(instantFallbackTimer);
-      instantFallbackTimer = null;
+    const overSummary = isOverSummary(data);
+    if (instantFallbackTimer && key === currentPreviewEventId) { clearTimeout(instantFallbackTimer); instantFallbackTimer = null; }
+    if (overSummary) {
+      if (spokenEventIds.has(key)) return;
+      if (playbackIsActive() && activePlaybackEventId !== key) { enqueueOverSummary(data); return; }
+    } else {
+      if (browserFallbackEventIds.has(key) || spokenEventIds.has(key)) return;
+      if (playbackIsActive() && activePlaybackEventId !== key) { enqueueLatestBall('commentary', data); return; }
+      if (pendingOverSummaries.length && !playbackIsActive()) { enqueueLatestBall('commentary', data); drainPendingPlayback(); return; }
     }
-
-    // Local speech already announced this ball while the remote voice was waiting.
-    if (browserFallbackEventIds.has(key)) {
-      playerStateText.textContent = "Current ball already announced; skipped late MP3 to prevent replay.";
-      return;
-    }
-    if (spokenEventIds.has(key)) return;
-
-    if (commentaryTimeout) {
-      clearTimeout(commentaryTimeout);
-      commentaryTimeout = null;
-    }
-
+    if (commentaryTimeout) { clearTimeout(commentaryTimeout); commentaryTimeout = null; }
     currentPreviewEventId = key;
     rememberEvent(spokenEventIds, key);
     speakingText.textContent = '"' + (data.text || "") + '"';
     setTalkingState(true, data.badge);
-
     if (data.audio_url && !isAudioMuted && audioPlayer) {
       cancelBrowserSpeech();
       audioPlayer.pause();
       audioPlayer.currentTime = 0;
       audioPlayer.muted = false;
       audioPlayer.src = data.audio_url;
-
+      activePlaybackEventId = key;
+      audioPlayer.onended = () => finishPlayback(key);
+      audioPlayer.onerror = () => finishPlayback(key);
       const playPromise = audioPlayer.play();
       if (playPromise !== undefined) {
         playPromise.then(() => {
@@ -543,22 +582,23 @@
             (data.duration ? " (" + data.duration.toFixed(1) + "s)" : "");
         }).catch((e) => {
           console.warn("Remote audio could not play; using instant browser voice:", e);
+          if (activePlaybackEventId === key) activePlaybackEventId = "";
+          audioPlayer.onended = null;
+          audioPlayer.onerror = null;
           spokenEventIds.delete(key);
           speakInstantBrowserFallback(data, key);
         });
       }
     } else if (!isAudioMuted) {
       spokenEventIds.delete(key);
-      speakInstantBrowserFallback(data, key);
+      const started = speakInstantBrowserFallback(data, key);
+      if (!started) { setTalkingState(false); drainPendingPlayback(); }
+    } else {
+      activePlaybackEventId = "";
+      setTalkingState(false);
+      drainPendingPlayback();
     }
-
-    const durMs = (data.duration || 4.0) * 1000;
-    commentaryTimeout = setTimeout(() => {
-      commentaryTimeout = null;
-      if (currentPreviewEventId === key) setTalkingState(false);
-    }, durMs);
   }
-
   function resetStudioToIdle() {
     onAirBadge.className = "on-air-badge";
     onAirText.textContent = "STUDIO READY";
@@ -801,6 +841,9 @@
       instantFallbackTimer = null;
     }
     cancelBrowserSpeech();
+    activePlaybackEventId = "";
+    pendingBallEvent = null;
+    pendingOverSummaries.length = 0;
     if (audioPlayer) {
       try { audioPlayer.pause(); audioPlayer.currentTime = 0; } catch (_) {}
     }
@@ -819,6 +862,9 @@
         instantFallbackTimer = null;
       }
       cancelBrowserSpeech();
+      activePlaybackEventId = "";
+      pendingBallEvent = null;
+      pendingOverSummaries.length = 0;
       if (audioPlayer) {
         audioPlayer.pause();
         audioPlayer.muted = true;
