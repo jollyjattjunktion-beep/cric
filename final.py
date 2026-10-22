@@ -886,12 +886,14 @@ EXTRACT_JS = r'''() => {
     }
 
     let latestOverNum = null;
+    let latestOverLabel = -1;
+    let bestRowBallCount = -1;
     const overRows = document.querySelectorAll(
         'div[class*="over-card"], div[class*="recent-over"], div[class*="overRow"], div[class*="overWrap"], div[class*="over"]'
     );
     for (const row of overRows) {
         const rowText = row.innerText || '';
-        const m = rowText.match(/\bOver\s+(\d+)\b/i);
+        const m = rowText.match(/\\bOver\\s+(\\d+)\\b/i);
         if (!m) continue;
         const parsedOver = parseInt(m[1], 10);
         const rowBalls = [];
@@ -902,8 +904,15 @@ EXTRACT_JS = r'''() => {
             if (BALL_TOKEN.test(val)) rowBalls.push(val);
         }
         if (rowBalls.length > 0 && rowBalls.length <= 12) {
-            latestOverNum = parsedOver - 1;
-            activeBalls = rowBalls;
+            // Nested DOM order is not chronological. Keep the highest visible
+            // over label, then the most complete circle row for that over.
+            if (parsedOver > latestOverLabel ||
+                (parsedOver === latestOverLabel && rowBalls.length > bestRowBallCount)) {
+                latestOverLabel = parsedOver;
+                latestOverNum = parsedOver - 1;
+                bestRowBallCount = rowBalls.length;
+                activeBalls = rowBalls;
+            }
         }
     }
 
