@@ -1541,7 +1541,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "radio-hinglish-fast-20261022-1",
+        "server_build": "radio-hinglish-fast-20261022-2",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
