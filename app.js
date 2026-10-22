@@ -164,11 +164,13 @@
         handleCommentary(msg.data);
         break;
 
-      case "tts_error":
-        if (msg.data && msg.data.message) {
-          playerStateText.textContent = "Audio generation failed for ball " + (msg.data.over || "") + ": " + msg.data.message;
+      case "tts_error": {
+        const errorKey = commentaryEventId(msg.data || {});
+        if (msg.data && msg.data.message && !spokenEventIds.has(errorKey)) {
+          playerStateText.textContent = "Madhur TTS delayed for ball " + (msg.data.over || "") + ": " + msg.data.message;
         }
         break;
+      }
 
       case "feed_item":
         addFeedItem(msg.data);
@@ -361,22 +363,123 @@
   document.addEventListener("touchstart", unlockAudio, { once: true });
 
   let commentaryTimeout = null;
+  let instantFallbackTimer = null;
+  let currentPreviewEventId = "";
+  let activeBrowserUtterance = null;
+  const spokenEventIds = new Set();
+  const browserFallbackEventIds = new Set();
+
+  function commentaryEventId(data) {
+    return String(
+      (data && data.event_id) ||
+      (data && data.over ? (data.over + "|" + (data.circle_value || data.badge || "ball")) : "") ||
+      (data && data.text ? data.text.slice(0, 80) : "live-ball")
+    );
+  }
+
+  function rememberEvent(set, key) {
+    if (!key) return;
+    set.add(key);
+    while (set.size > 80) set.delete(set.values().next().value);
+  }
+
+  function cancelBrowserSpeech() {
+    try {
+      if ("speechSynthesis" in window) window.speechSynthesis.cancel();
+    } catch (_) {}
+    activeBrowserUtterance = null;
+  }
+
+  function speakInstantBrowserFallback(data, key) {
+    if (!data || !key || isAudioMuted || spokenEventIds.has(key)) return false;
+    if (!("speechSynthesis" in window) || typeof SpeechSynthesisUtterance === "undefined") {
+      playerStateText.textContent = "Madhur audio is still preparing; this browser has no instant speech fallback.";
+      return false;
+    }
+
+    try {
+      const synth = window.speechSynthesis;
+      const utterance = new SpeechSynthesisUtterance(String(data.text || ""));
+      const voices = synth.getVoices ? synth.getVoices() : [];
+      const hindiVoices = voices.filter(v => /^hi(?:-|$)/i.test(v.lang || ""));
+      const preferred =
+        voices.find(v => /madhur/i.test(v.name || "")) ||
+        hindiVoices.find(v => /google|microsoft|natural/i.test(v.name || "")) ||
+        hindiVoices[0] ||
+        voices.find(v => /^en-IN/i.test(v.lang || "")) ||
+        null;
+
+      if (preferred) {
+        utterance.voice = preferred;
+        utterance.lang = preferred.lang || "hi-IN";
+      } else {
+        utterance.lang = /[\u0900-\u097F]/.test(utterance.text) ? "hi-IN" : "en-IN";
+      }
+
+      const badge = String(data.badge || "").toUpperCase();
+      utterance.rate = /SIX|WICKET/.test(badge) ? 1.16 : /FOUR/.test(badge) ? 1.12 : 1.08;
+      utterance.pitch = /SIX|WICKET/.test(badge) ? 1.12 : 1.02;
+      utterance.volume = 1;
+
+      // Claim this ball before scheduling local speech; any late MP3 is suppressed.
+      rememberEvent(spokenEventIds, key);
+      rememberEvent(browserFallbackEventIds, key);
+      activeBrowserUtterance = utterance;
+
+      utterance.onstart = () => {
+        if (currentPreviewEventId !== key) return;
+        onAirBadge.className = "on-air-badge active";
+        onAirText.textContent = (data.badge || "LIVE BALL") + " • FAST VOICE";
+        waveform.className = "waveform active";
+        playerStateText.textContent =
+          (preferred && /madhur/i.test(preferred.name || ""))
+            ? "⚡ Instant local Madhur voice"
+            : "⚡ Instant browser voice (" + (preferred ? preferred.name : utterance.lang) + "); remote Madhur was delayed";
+      };
+      utterance.onend = () => {
+        if (activeBrowserUtterance === utterance) activeBrowserUtterance = null;
+        if (currentPreviewEventId === key) setTalkingState(false);
+      };
+      utterance.onerror = () => {
+        if (activeBrowserUtterance === utterance) activeBrowserUtterance = null;
+        playerStateText.textContent = "Browser voice fallback failed; check browser audio permissions.";
+      };
+
+      synth.speak(utterance);
+      return true;
+    } catch (e) {
+      console.warn("[Preet Sports] Instant voice fallback failed:", e);
+      return false;
+    }
+  }
 
   function handleCommentaryPreview(data) {
     if (!data) return;
+    const key = commentaryEventId(data);
+
+    // Same circle snapshot can be re-sent during refresh; do not restart/repeat it.
+    if (key === currentPreviewEventId && spokenEventIds.has(key)) return;
+
+    if (instantFallbackTimer) {
+      clearTimeout(instantFallbackTimer);
+      instantFallbackTimer = null;
+    }
     if (commentaryTimeout) {
       clearTimeout(commentaryTimeout);
       commentaryTimeout = null;
     }
 
-    // Replace stale on-air text immediately when a new circle is detected.
-    speakingText.textContent = `"${data.text || "New delivery detected."}"`;
-    onAirBadge.className = "on-air-badge waiting";
-    onAirText.textContent = `${data.badge || "NEW BALL"} • PREPARING AUDIO`;
-    waveform.className = "waveform";
-    playerStateText.textContent = `Preparing Madhur audio for ${data.over || "the latest ball"} [${data.circle_value || "?"}]...`;
+    currentPreviewEventId = key;
+    cancelBrowserSpeech();
 
-    // Never leave the previous ball playing while a new circle is waiting for TTS.
+    // Update visible text immediately, before Edge returns a complete MP3.
+    speakingText.textContent = '"' + (data.text || "New delivery detected.") + '"';
+    onAirBadge.className = "on-air-badge waiting";
+    onAirText.textContent = (data.badge || "NEW BALL") + " • PREPARING AUDIO";
+    waveform.className = "waveform";
+    playerStateText.textContent = "Preparing Madhur audio for " + (data.over || "the latest ball") +
+      " [" + (data.circle_value || "?") + "]...";
+
     if (audioPlayer) {
       try {
         audioPlayer.pause();
@@ -385,18 +488,48 @@
         audioPlayer.load();
       } catch (_) {}
     }
+
+    // Edge Madhur is preferred. If it has not returned in about a second, speak
+    // the same current-ball line using the best installed browser Hindi voice.
+    const waitMs = Number(data.voice_fallback_after_ms) || 900;
+    if (!isAudioMuted && !spokenEventIds.has(key)) {
+      instantFallbackTimer = setTimeout(() => {
+        instantFallbackTimer = null;
+        if (currentPreviewEventId === key && !spokenEventIds.has(key)) {
+          speakInstantBrowserFallback(data, key);
+        }
+      }, Math.max(500, Math.min(waitMs, 1500)));
+    }
   }
 
   function handleCommentary(data) {
+    if (!data) return;
+    const key = commentaryEventId(data);
+
+    if (instantFallbackTimer && key === currentPreviewEventId) {
+      clearTimeout(instantFallbackTimer);
+      instantFallbackTimer = null;
+    }
+
+    // Local speech already announced this ball while the remote voice was waiting.
+    if (browserFallbackEventIds.has(key)) {
+      playerStateText.textContent = "Current ball already announced; skipped late MP3 to prevent replay.";
+      return;
+    }
+    if (spokenEventIds.has(key)) return;
+
     if (commentaryTimeout) {
       clearTimeout(commentaryTimeout);
       commentaryTimeout = null;
     }
-    speakingText.textContent = `"${data.text}"`;
+
+    currentPreviewEventId = key;
+    rememberEvent(spokenEventIds, key);
+    speakingText.textContent = '"' + (data.text || "") + '"';
     setTalkingState(true, data.badge);
 
-    // If an audio file URL is provided, play it
     if (data.audio_url && !isAudioMuted && audioPlayer) {
+      cancelBrowserSpeech();
       audioPlayer.pause();
       audioPlayer.currentTime = 0;
       audioPlayer.muted = false;
@@ -406,19 +539,23 @@
       if (playPromise !== undefined) {
         playPromise.then(() => {
           isAudioUnlocked = true;
-          playerStateText.textContent = `🎙️ On-Air Voice: ${data.badge || 'Live Commentary'} (${data.duration ? data.duration.toFixed(1) + 's' : ''})`;
+          playerStateText.textContent = "🎙️ On-Air Madhur: " + (data.badge || "Live Commentary") +
+            (data.duration ? " (" + data.duration.toFixed(1) + "s)" : "");
         }).catch((e) => {
-          console.warn("Auto-play prevented by browser policy (interact with page first):", e);
-          playerStateText.innerHTML = '<span style="color: #f87171; font-weight: 600; cursor: pointer;">🔊 Tap here or click screen to hear voice</span>';
+          console.warn("Remote audio could not play; using instant browser voice:", e);
+          spokenEventIds.delete(key);
+          speakInstantBrowserFallback(data, key);
         });
       }
+    } else if (!isAudioMuted) {
+      spokenEventIds.delete(key);
+      speakInstantBrowserFallback(data, key);
     }
 
-    // Reset talking state after duration
     const durMs = (data.duration || 4.0) * 1000;
     commentaryTimeout = setTimeout(() => {
       commentaryTimeout = null;
-      setTalkingState(false);
+      if (currentPreviewEventId === key) setTalkingState(false);
     }, durMs);
   }
 
