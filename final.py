@@ -1389,12 +1389,19 @@ def _web_ball_names(info):
     return bowler, batsman
 
 
+def _coerce_score_int(value, fallback=None):
+    """Return an integer for a score value, or a fallback if it is absent."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return fallback
+
 def _web_batter_score_suffix(info):
     """Natural batter figures in Hindi-script Hinglish; retain exact player names."""
     players = []
     for prefix in ("striker", "non_striker"):
         name = str(info.get(prefix) or "").strip()
-        runs = _safe_int(info.get(f"{prefix}_runs"))
+        runs = _coerce_score_int(info.get(f"{prefix}_runs"))
         balls = _safe_int(info.get(f"{prefix}_balls"))
         if not name or runs is None or balls is None or name.lower().startswith("batter "):
             continue
