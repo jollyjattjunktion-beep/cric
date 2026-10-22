@@ -35,7 +35,7 @@ import tempfile
 import subprocess
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import edge_tts
@@ -52,12 +52,12 @@ DEFAULT_URL = (
     "https://crex.com/cricket-live-score/"
     "abd-vs-emb-2nd-semi-final-emirates-d10-league-2026-match-updates-14NA"
 )
-POLL_SECONDS = 0.35
-OVER_SETTLE_SECONDS = 0.6
-WICKET_CARD_WAIT_SECONDS = 0.45
+POLL_SECONDS = 2.0
+OVER_SETTLE_SECONDS = 2.5
+WICKET_CARD_WAIT_SECONDS = 1.2
 PAGE_LOAD_TIMEOUT_MS = 45_000
 RELOAD_AFTER_FAILURES = 5
-TTS_TIMEOUT_SECONDS = 8
+TTS_TIMEOUT_SECONDS = 25
 VOICE_NAME = "hi-IN-MadhurNeural"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -78,11 +78,10 @@ BLOCKED_URL_PATTERNS = (
 
 # Voice delivery per excitement level: (rate, pitch, volume)
 AUDIO_PROFILES = {
-    # Conversational Madhur delivery with restrained emphasis.
-    1: ("+3%",  "+0Hz", "+0%"),
-    2: ("+5%",  "+1Hz", "+5%"),
-    3: ("+8%",  "+2Hz", "+10%"),
-    4: ("+10%", "+3Hz", "+18%"),
+    1: ("+15%", "+10Hz", "+0%"),    # Level 1 (Dot balls): Normal speaking volume
+    2: ("+20%", "+12Hz", "+15%"),   # Level 2 (Singles/Extras): Slightly louder
+    3: ("+25%", "+15Hz", "+35%"),   # Level 3 (Fours): Loud and punchy
+    4: ("+30%", "+20Hz", "+60%"),   # Level 4 (Sixes/Wickets): Shouting over the crowd
 }
 
 log = logging.getLogger("crex_radio")
@@ -227,63 +226,6 @@ COMMON_NAMES = {
     "muhammad": "मुहम्मद", "patel": "पटेल", "malik": "मलिक", "iqbal": "इकबाल",
     "rahman": "रहमान", "raza": "रज़ा",
 }
-
-
-# Match-specific pronunciation overrides. These take precedence over approximate
-# letter-by-letter phonetic rules for names heard in live commentary.
-PLAYER_NAME_PRONUNCIATIONS = {
-    "dasun shanaka": "दासुन शनाका",
-    "pavan rathnayake": "पवन रथनायके",
-    "liam dawson": "लियाम डॉसन",
-    "avishka fernando": "अविश्का फर्नांडो",
-    "jamie overton": "जेमी ओवरटन",
-    "wiaan mulder": "वियान मुल्डर",
-    "beau webster": "बो वेब्स्टर",
-    "pathum nissanka": "पथुम निसांका",
-    "charith asalanka": "चरिथ असलंका",
-    "kusal mendis": "कुसल मेंडिस",
-    "kamindu mendis": "कमिंदु मेंडिस",
-    "dhananjaya de silva": "धनंजय डी सिल्वा",
-    "angelo mathews": "एंजेलो मैथ्यूज़",
-    "wanindu hasaranga": "वानिंदु हसरंगा",
-    "maheesh theekshana": "महेश थीक्षना",
-    "dilshan madushanka": "दिलशान मदुशंका",
-    "kusal perera": "कुसल परेरा",
-    "dinesh chandimal": "दिनेश चांदीमल",
-    "kamindu mendis": "कमिंदु मेंडिस",
-    "joe root": "जो रूट",
-    "ben stokes": "बेन स्टोक्स",
-    "jos buttler": "जोस बटलर",
-    "harry brook": "हैरी ब्रूक",
-    "jofra archer": "जोफ्रा आर्चर",
-    "ad il rashid": "आदिल रशीद",
-    "adil rashid": "आदिल रशीद",
-    "mark wood": "मार्क वुड",
-    "willey": "विली",
-}
-COMMON_NAMES.update({
-    "dasun": "दासुन", "shanaka": "शनाका",
-    "pavan": "पवन", "rathnayake": "रथनायके",
-    "liam": "लियाम", "dawson": "डॉसन",
-    "avishka": "अविश्का", "fernando": "फर्नांडो",
-    "jamie": "जेमी", "overton": "ओवरटन",
-    "wiaan": "वियान", "mulder": "मुल्डर",
-    "beau": "बो", "webster": "वेब्स्टर",
-    "pathum": "पथुम", "nissanka": "निसांका",
-    "charith": "चरिथ", "asalanka": "असलंका",
-    "kusal": "कुसल", "mendis": "मेंडिस",
-    "kamindu": "कमिंदु", "dhananjaya": "धनंजय",
-    "silva": "सिल्वा", "angelo": "एंजेलो",
-    "mathews": "मैथ्यूज़", "wanindu": "वानिंदु",
-    "hasaranga": "हसरंगा", "maheesh": "महेश",
-    "theekshana": "थीक्षना", "dilshan": "दिलशान",
-    "madushanka": "मदुशंका", "perera": "परेरा",
-    "chandimal": "चांदीमल", "root": "रूट",
-    "stokes": "स्टोक्स", "buttler": "बटलर",
-    "brook": "ब्रूक", "jofra": "जोफ्रा",
-    "archer": "आर्चर", "adil": "आदिल",
-    "rashid": "रशीद", "mark": "मार्क", "wood": "वुड",
-})
 
 PHONIC_RULES = (
     ("sh", "श"), ("ch", "च"), ("th", "थ"), ("ph", "फ"), ("kh", "ख"),
@@ -663,32 +605,29 @@ def build_over_summary(
     stats: Optional[dict] = None,
     match_overs: Optional[int] = None,
 ) -> str:
-    """Short Hinglish over recap with a naturally spoken current score."""
+    over_word = over_ordinal_hindi(over_int)
     parts: list[str] = []
 
     if stats and stats.get("legal", 0) >= 6:
-        over_runs = int(stats.get("runs", 0))
-        over_wickets = int(stats.get("wickets", 0))
-        fours = int(stats.get("fours", 0))
-        sixes = int(stats.get("sixes", 0))
-        if over_runs == 0 and over_wickets == 0:
-            parts.append(f"Over {over_int} complete—maiden over! Is over mein koi run nahi. Great bowling!")
-        elif over_runs == 0:
-            parts.append(f"Over {over_int} complete—wicket maiden! Koi run nahi, {over_wickets} wicket. Superb bowling!")
+        if stats["runs"] == 0 and stats["wickets"] == 0:
+            parts.append(f"ओवर समाप्त! {over_word} ओवर मेडन! एक भी रन नहीं आया, कमाल की गेंदबाज़ी!")
+        elif stats["runs"] == 0:
+            wk = _count_phrase(stats["wickets"], "एक विकेट", "विकेट")
+            parts.append(f"ओवर समाप्त! विकेट मेडन! {over_word} ओवर में एक भी रन नहीं और {wk}! शानदार ओवर!")
         else:
-            details = []
-            if fours:
-                details.append(f"{fours} fours")
-            if sixes:
-                details.append(f"{sixes} sixes")
-            if over_wickets:
-                details.append(f"{over_wickets} wickets")
-            line = f"Over {over_int} complete! Is over mein {over_runs} runs aaye"
-            if details:
-                line += ", " + ", ".join(details)
-            parts.append(line + ".")
+            detail = []
+            if stats["sixes"]:
+                detail.append(_count_phrase(stats["sixes"], "एक छक्का", "छक्के"))
+            if stats["fours"]:
+                detail.append(_count_phrase(stats["fours"], "एक चौका", "चौके"))
+            if stats["wickets"]:
+                detail.append(_count_phrase(stats["wickets"], "एक विकेट", "विकेट"))
+            line = f"ओवर समाप्त! {over_word} ओवर में आए {number_to_hindi_words(stats['runs'])} रन"
+            if detail:
+                line += ", जिसमें " + _join_hindi(detail)
+            parts.append(line + "।")
     else:
-        parts.append(f"Over {over_int} complete.")
+        parts.append(f"ओवर समाप्त! {over_word} ओवर का खेल पूरा हुआ।")
 
     try:
         runs_num = int(str(runs).strip())
@@ -696,20 +635,27 @@ def build_over_summary(
     except (TypeError, ValueError):
         return " ".join(parts)
 
-    parts.append(f"Score {runs_num} for {wkts_num}.")
+    runs_hi = number_to_hindi_words(runs_num)
+    if wkts_num == 0:
+        parts.append(f"स्कोर {runs_hi} रन, बिना किसी विकेट के नुकसान के।")
+    else:
+        parts.append(f"स्कोर {runs_hi} रन, {number_to_hindi_words(wkts_num)} विकेट के नुकसान पर।")
+
     crr = round(runs_num / max(over_int, 1), 2)
+    crr_hi = number_to_hindi_words(int(crr))
     high, mid = _rr_thresholds(match_overs)
     if crr >= high:
-        parts.append(f"Run rate {crr:.2f} per over hai—batting side achchi position mein hai.")
+        parts.append(f"करंट रन रेट {crr_hi} के पार पहुंच चुका है, बल्लेबाज़ पूरी तरह हावी हैं।")
     elif crr >= mid:
-        parts.append(f"Run rate {crr:.2f} per over hai, scoring steady chal rahi hai.")
+        parts.append(f"रन गति लगभग {crr_hi} प्रति ओवर की है, दोनों टीमें अपनी रणनीति पर कायम हैं।")
     else:
-        parts.append(f"Run rate {crr:.2f} per over hai—ab runs accelerate karne honge.")
+        parts.append(f"रन गति {crr_hi} के आसपास थोड़ी धीमी है, अब बड़े शॉट्स की तलाश होगी।")
 
     if match_overs and over_int < match_overs:
-        parts.append(f"{match_overs - over_int} overs abhi baaki hain.")
+        parts.append(f"पारी में अभी {number_to_hindi_words(match_overs - over_int)} ओवर बाकी हैं।")
 
     return " ".join(parts)
+
 
 def build_innings_end(runs, wkts) -> str:
     try:
@@ -917,8 +863,6 @@ class MatchState:
     last_wkts: Optional[int] = None
     innings_break_seen: bool = False
     match_overs: Optional[int] = None
-    # One over can be announced only once even if CREX repeats its last-circle snapshot.
-    announced_overs: set[int] = field(default_factory=set)
 
 
 EXTRACT_JS = r'''() => {
@@ -939,13 +883,11 @@ EXTRACT_JS = r'''() => {
     const EXTRA_RE = /(?:wd|wide|nb|no\s*ball)/i;
     const BALL_TOKEN = /^(?:[0-6]|w|wkt|out|wd|wide|nb|no\s*ball|lb|b|•|\d+\s*(?:wd|nb|lb|b)|(?:wd|nb|lb|b)\s*\+?\s*\d+)$/i;
 
-    if (/\((?:10\.0|20\.0|50\.0)\)/.test(title) || /Innings Break/i.test(bodyText) || /-10\b/.test(title)) {
+    if (/\((?:10\.0\vert{}20\.0\vert{}50\.0)\)/.test(title) || /Innings Break/i.test(bodyText) || /-10\b/.test(title)) {
         isInningsBreak = true;
     }
 
     let latestOverNum = null;
-    let latestOverLabel = -1;
-    let bestRowBallCount = -1;
     const overRows = document.querySelectorAll(
         'div[class*="over-card"], div[class*="recent-over"], div[class*="overRow"], div[class*="overWrap"], div[class*="over"]'
     );
@@ -962,15 +904,8 @@ EXTRACT_JS = r'''() => {
             if (BALL_TOKEN.test(val)) rowBalls.push(val);
         }
         if (rowBalls.length > 0 && rowBalls.length <= 12) {
-            // Nested DOM order is not chronological. Keep the highest visible
-            // over label, then the most complete circle row for that over.
-            if (parsedOver > latestOverLabel ||
-                (parsedOver === latestOverLabel && rowBalls.length > bestRowBallCount)) {
-                latestOverLabel = parsedOver;
-                latestOverNum = parsedOver - 1;
-                bestRowBallCount = rowBalls.length;
-                activeBalls = rowBalls;
-            }
+            latestOverNum = parsedOver - 1;
+            activeBalls = rowBalls;
         }
     }
 
@@ -1140,18 +1075,12 @@ def is_backwards(prev: Optional[str], cur: Optional[str]) -> bool:
 async def announce_over_end(
     page: Page, announcer: RadioAnnouncer, snap: BallSnapshot, state: MatchState
 ) -> None:
-    over_int = int(snap.ball.split(".")[0]) + 1
-    if over_int in state.announced_overs:
-        log.info("Suppressing duplicate over recap for over %s", over_int)
-        return
-    # Claim it before the wait so repeated page snapshots cannot enqueue it again.
-    state.announced_overs.add(over_int)
-
     await asyncio.sleep(OVER_SETTLE_SECONDS)
     fresh = await extract_circle_balls_data(page)
     runs = fresh.runs if fresh and fresh.runs is not None else snap.runs
     wkts = fresh.wkts if fresh and fresh.wkts is not None else snap.wkts
 
+    over_int = int(snap.ball.split(".")[0]) + 1
     stats = over_stats_from_tokens(snap.over_balls)
     print(f"\n📊 Over {over_int} done | score {runs}/{wkts} | over stats {stats}")
     msg = build_over_summary(over_int, runs, wkts, stats, state.match_overs)
@@ -1373,415 +1302,6 @@ def main() -> None:
     except Exception:
         traceback.print_exc()
         input("\nPress ENTER to close...")
-
-
-# WEB-APP COMPATIBILITY ADAPTER
-# Reuse final.py's circle logic inside the browser broadcaster.
-# ============================================================
-def _numbers_as_hindi_words(text):
-    """Keep Hinglish wording while making every spoken numeral a Hindi word."""
-    def convert(match):
-        value = match.group(0)
-        if "." in value:
-            whole, fraction = value.split(".", 1)
-            fraction_words = " ".join(number_to_hindi_words(int(char)) for char in fraction)
-            return f"{number_to_hindi_words(int(whole))} दशमलव {fraction_words}"
-        return number_to_hindi_words(int(value))
-    return re.sub(r"(?<![A-Za-z0-9_])\d+(?:\.\d+)?(?![A-Za-z0-9_])", convert, str(text or ""))
-
-
-def _hinglish_ball_phrase(ball_str):
-    """Consistent Hindi-script Hinglish phrase for the current over and ball."""
-    try:
-        over_num, ball_idx = parse_ball(ball_str)
-    except Exception:
-        return "अगली बॉल"
-    ball_words = {
-        1: "पहली बॉल", 2: "दूसरी बॉल", 3: "तीसरी बॉल",
-        4: "चौथी बॉल", 5: "पांचवीं बॉल", 6: "आखिरी बॉल",
-    }
-    return f"{over_ordinal_hindi(over_num)} ओवर की {ball_words.get(ball_idx, 'अगली बॉल')}"
-
-def _over_nominative_hindi(over_num):
-    """Grammatical subject form for recap openings, e.g. 'सत्ताईसवाँ ओवर पूरा हुआ'."""
-    direct = {
-        1: "पहला", 2: "दूसरा", 3: "तीसरा", 4: "चौथा", 5: "पाँचवाँ",
-        6: "छठा", 7: "सातवाँ", 8: "आठवाँ", 9: "नौवाँ", 10: "दसवाँ",
-        11: "ग्यारहवाँ", 12: "बारहवाँ", 13: "तेरहवाँ", 14: "चौदहवाँ",
-        15: "पंद्रहवाँ", 16: "सोलहवाँ", 17: "सत्रहवाँ", 18: "अठारहवाँ",
-        19: "उन्नीसवाँ", 20: "बीसवाँ",
-    }
-    return direct.get(int(over_num), f"{number_to_hindi_words(int(over_num))}वाँ")
-
-
-def _hinglish_dismissal_line(how_out, bowler):
-    """Return natural Hindi-script Hinglish; keep international player names in Latin."""
-    details = re.sub(r"\s+", " ", str(how_out or "").strip())
-    lower = details.lower()
-    if "run out" in lower or "runout" in lower:
-        return "रन आउट! दौड़ में तालमेल नहीं बना और विकेट चला गया।"
-    if "hit wicket" in lower or "hitwicket" in lower:
-        return "हिट विकेट! बल्लेबाज़ से अपने ही स्टंप गिर गए।"
-    if "lbw" in lower:
-        return "एलबीडब्ल्यू आउट! अंपायर ने उंगली उठा दी।"
-    if re.search(r"\bst\s+", lower):
-        return "स्टंप्ड आउट! विकेटकीपर ने बेल्स गिरा दीं।"
-    if re.search(r"\bc\s*&\s*b\b", lower):
-        return f"कैच एंड बोल्ड! {bowler or 'गेंदबाज़'} ने अपनी ही गेंद पर कैच पकड़ा।"
-    caught = re.search(r"\bc\s+([A-Za-z .'-]+?)\s+b\s+([A-Za-z .'-]+)$", details, re.IGNORECASE)
-    if caught:
-        fielder, dismissed_by = caught.group(1).strip(), caught.group(2).strip()
-        return f"कैच आउट! {fielder} ने कैच पकड़ा। {dismissed_by} को विकेट मिला।"
-    if re.search(r"\bb\s+[a-z]", lower):
-        return f"क्लीन बोल्ड! {bowler or 'गेंदबाज़'} की शानदार गेंद।"
-    return f"{bowler or 'गेंदबाज़'} की गेंद पर बड़ा विकेट।"
-
-def _web_circle_value(info):
-    value = info.get("circle_val")
-    if value is None or str(value).strip() == "":
-        value = info.get("runs", "")
-    return "" if value is None else str(value).strip().upper()
-
-
-def _web_ball_names(info):
-    matchup = str(info.get("matchup") or "").strip()
-    bowler = str(info.get("bowler") or "").strip()
-    batsman = str(info.get("batsman") or info.get("batter") or info.get("striker") or "").strip()
-    parts = re.split(r"\s+to\s+", matchup, maxsplit=1, flags=re.IGNORECASE)
-    if len(parts) == 2:
-        bowler = parts[0].strip(" ,:.") or bowler
-        batsman = parts[1].strip(" ,:.") or batsman
-    elif "," in matchup:
-        left, right = matchup.split(",", 1)
-        bowler = left.strip(" ,:.") or bowler
-        batsman = re.sub(r"\s*(?:को|to)\s*$", "", right.strip(" ,:."), flags=re.IGNORECASE) or batsman
-    return bowler, batsman
-
-
-def _coerce_score_int(value, fallback=None):
-    """Return an integer for a score value, or a fallback if it is absent."""
-    try:
-        return int(str(value).strip())
-    except (TypeError, ValueError):
-        return fallback
-
-def _web_batter_score_suffix(info):
-    """Natural batter figures in Hindi-script Hinglish; retain exact player names."""
-    players = []
-    for prefix in ("striker", "non_striker"):
-        name = str(info.get(prefix) or "").strip()
-        runs = _coerce_score_int(info.get(f"{prefix}_runs"))
-        balls = _coerce_score_int(info.get(f"{prefix}_balls"))
-        if not name or runs is None or balls is None or name.lower().startswith("batter "):
-            continue
-        players.append(
-            f"{name} {number_to_hindi_words(runs)} रन, {number_to_hindi_words(balls)} गेंदें"
-        )
-    return "; ".join(players)
-
-
-def _pronunciation_context_names(context=None):
-    """Extract likely player names from delivery, matchup, and wicket metadata."""
-    if not isinstance(context, dict):
-        return []
-    names = []
-    def add(value):
-        if not isinstance(value, str):
-            return
-        value = re.sub(r"\s+", " ", value).strip(" \t\r\n,.:;")
-        if not value or len(value) < 3 or value.lower() in {
-            "batter", "batsman", "bowler", "unknown", "innings", "team"
-        }:
-            return
-        if not re.search(r"[A-Za-z]", value):
-            return
-        if value not in names:
-            names.append(value)
-
-    for key in (
-        "bowler", "batsman", "batter", "striker", "non_striker",
-        "fielder", "player", "dismissed_batter", "dismissed_player",
-    ):
-        add(context.get(key))
-
-    matchup = str(context.get("matchup") or "")
-    split = re.split(r"\s+to\s+", matchup, maxsplit=1, flags=re.IGNORECASE)
-    if len(split) == 2:
-        add(split[0])
-        add(split[1])
-
-    dismissal = (
-        context.get("last_dismissal")
-        or context.get("lastDismissal")
-        or context.get("dismissal_card")
-        or {}
-    )
-    if isinstance(dismissal, dict):
-        for key in ("batter", "batsman", "bowler", "fielder", "player", "name", "dismissed_player"):
-            add(dismissal.get(key))
-        how_out = str(dismissal.get("howOut") or dismissal.get("how_out") or "")
-    else:
-        how_out = str(dismissal or "")
-
-    # Common scorecard notations: c Fielder b Bowler; st Keeper b Bowler; b Bowler.
-    match = re.search(r"\bc\s+([A-Za-z][A-Za-z .'-]+?)\s+b\s+([A-Za-z][A-Za-z .'-]+)$", how_out, re.IGNORECASE)
-    if match:
-        add(match.group(1))
-        add(match.group(2))
-    else:
-        match = re.search(r"\bst\s+([A-Za-z][A-Za-z .'-]+?)\s+b\s+([A-Za-z][A-Za-z .'-]+)$", how_out, re.IGNORECASE)
-        if match:
-            add(match.group(1))
-            add(match.group(2))
-        else:
-            match = re.search(r"\bb\s+([A-Za-z][A-Za-z .'-]+)$", how_out, re.IGNORECASE)
-            if match:
-                add(match.group(1))
-    return sorted(names, key=len, reverse=True)
-
-
-def prepare_tts_pronunciation_text(text, context=None):
-    """Apply player-name pronunciations to TTS only; on-screen wording stays untouched."""
-    result = str(text or "")
-    names = _pronunciation_context_names(context)
-
-    # First apply full-name overrides even if the ball context wasn't available (e.g. recap).
-    for name, phonetic in sorted(PLAYER_NAME_PRONUNCIATIONS.items(), key=lambda item: len(item[0]), reverse=True):
-        pattern = r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])"
-        result = re.sub(pattern, phonetic, result, flags=re.IGNORECASE)
-
-    # Then use the supplied master phonetic dictionary for names parsed from the live card.
-    for name in names:
-        pattern = r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])"
-        if not re.search(pattern, result, flags=re.IGNORECASE):
-            continue
-        key = re.sub(r"\s+", " ", name.strip()).lower()
-        phonetic = PLAYER_NAME_PRONUNCIATIONS.get(key)
-        if not phonetic:
-            phonetic = clean_player_name_to_hindi(name)
-        if phonetic:
-            result = re.sub(pattern, phonetic, result, flags=re.IGNORECASE)
-
-    # Cover dictionary names in summaries, where only a sentence may remain.
-    for key, phonetic in sorted(COMMON_NAMES.items(), key=lambda item: len(item[0]), reverse=True):
-        if len(key) < 3:
-            continue
-        pattern = r"(?<![A-Za-z])" + re.escape(key) + r"(?![A-Za-z])"
-        result = re.sub(pattern, phonetic, result, flags=re.IGNORECASE)
-    return result
-
-
-
-def build_live_circle_announcement(ball_info, lang="hi"):
-    """Build one natural current-ball call without mixed-script Hindi connectors."""
-    info = ball_info or {}
-    token = _web_circle_value(info)
-    if not token:
-        return {"should_speak": False}
-    over_label = str(info.get("over") or info.get("ball") or "").strip()
-    bowler, batsman = _web_ball_names(info)
-    dismissal = info.get("last_dismissal") or info.get("lastDismissal") or info.get("dismissal_card") or None
-    delivery = classify_delivery(token)
-    kind = delivery["kind"]
-    n = int(delivery.get("runs", 0) or 0)
-    event_kind = "four" if kind == "runs" and n == 4 else "six" if kind == "runs" and n == 6 else kind
-    lang_key = str(lang or "hi").strip().lower()
-
-    if lang_key in {"hinglish", "hi-en", "hi_en", "hi", "hindi"}:
-        phrase = _hinglish_ball_phrase(over_label)
-        if kind == "wicket":
-            card = dismissal or {}
-            batter_name = str(card.get("batter") or card.get("batsman") or batsman or "बल्लेबाज़").strip()
-            batter_runs = _coerce_score_int(card.get("runs"))
-            batter_balls = _coerce_score_int(card.get("balls"))
-            score_line = ""
-            if batter_runs is not None and batter_balls is not None:
-                score_line = (
-                    f" {number_to_hindi_words(batter_runs)} रन बनाकर, "
-                    f"{number_to_hindi_words(batter_balls)} गेंदें खेलकर"
-                )
-            spoken_text = (
-                f"{phrase}, विकेट! विकेट! {batter_name}{score_line} पवेलियन लौट रहे हैं। "
-                f"{_hinglish_dismissal_line(card.get('howOut', card.get('how_out', '')), bowler)}"
-            )
-            score_runs = _coerce_score_int(info.get("total_runs"))
-            score_wickets = _coerce_score_int(info.get("total_wickets"))
-            if score_runs is not None and score_wickets is not None:
-                spoken_text += (
-                    f" स्कोर अब {number_to_hindi_words(score_runs)} रन, "
-                    f"{number_to_hindi_words(score_wickets)} विकेट के नुकसान पर।"
-                )
-            suffix = _web_batter_score_suffix(info)
-            if suffix:
-                spoken_text += " बल्लेबाज़: " + suffix + "।"
-            level = 4
-        elif kind == "wide":
-            extra = " एक अतिरिक्त रन भी मिला।" if n <= 1 else f" {number_to_hindi_words(n)} रन मिले।"
-            spoken_text = f"{phrase}, वाइड बॉल! {bowler or 'गेंदबाज़'} की लाइन लेग साइड से बाहर थी।{extra}"
-            level = 2
-        elif kind == "noball":
-            spoken_text = f"{phrase}, नो बॉल! {bowler or 'गेंदबाज़'} ने क्रीज़ पार कर दी। अगली बॉल पर फ्री हिट।"
-            level = 2
-        elif kind == "legbye":
-            spoken_text = f"{phrase}, लेग बाई के {number_to_hindi_words(n)} रन। दोनों बल्लेबाज़ों ने तेजी से रन पूरा किया।"
-            level = 2
-        elif kind == "bye":
-            spoken_text = f"{phrase}, बाई के {number_to_hindi_words(n)} रन। विकेटकीपर से बॉल निकल गई।"
-            level = 2
-        elif n >= 6:
-            spoken_text = (
-                f"{phrase}, क्या शॉट है! {batsman or 'बल्लेबाज़'} ने बॉल को बाउंड्री के बाहर भेज दिया—छक्का! "
-                f"{bowler or 'गेंदबाज़'} के लिए महंगी बॉल।"
-            )
-            level = 4
-        elif n == 4:
-            spoken_text = f"{phrase}, शानदार टाइमिंग! {batsman or 'बल्लेबाज़'} ने गैप निकाला और बॉल बाउंड्री के पार—चौका!"
-            level = 3
-        elif n == 3:
-            spoken_text = f"{phrase}, तीन रन! विकेटों के बीच शानदार दौड़।"
-            level = 2
-        elif n == 2:
-            spoken_text = f"{phrase}, दो रन! गैप में शॉट खेला और दोनों बल्लेबाज़ों ने आसानी से रन पूरा किया।"
-            level = 2
-        elif n == 1:
-            spoken_text = f"{phrase}, एक रन लेकर स्ट्राइक बदल ली।"
-            level = 2
-        else:
-            spoken_text = f"{phrase}, अच्छी लाइन और लेंथ। कोई रन नहीं—डॉट बॉल।"
-            level = 1
-    else:
-        spoken_text, level = generate_circle_ball_commentary(over_label, token, bowler, batsman, dismissal)
-        if kind == "wicket":
-            score_runs = _coerce_score_int(info.get("total_runs"))
-            score_wickets = _coerce_score_int(info.get("total_wickets"))
-            if score_runs is not None and score_wickets is not None:
-                spoken_text += (
-                    f" स्कोर अब {number_to_hindi_words(score_runs)} रन, "
-                    f"{number_to_hindi_words(score_wickets)} विकेट के नुकसान पर।"
-                )
-            suffix = _web_batter_score_suffix(info)
-            if suffix:
-                spoken_text += " बल्लेबाज़: " + suffix + "।"
-
-    badges = {
-        "dot": "DOT BALL", "runs": "RUNS", "four": "FOUR", "six": "SIX",
-        "wide": "WIDE", "noball": "NO BALL", "legbye": "LEG BYE",
-        "bye": "BYE", "wicket": "WICKET",
-    }
-    rate, pitch, _volume = AUDIO_PROFILES[min(max(int(level), 1), 4)]
-    return {
-        "spoken_text": spoken_text,
-        "tts_text": prepare_tts_pronunciation_text(spoken_text, info),
-        "source_text": "",
-        "should_speak": True,
-        "event": event_kind,
-        "badge": badges.get(event_kind, badges.get(kind, "BALL")),
-        "level": level,
-        "rate": rate,
-        "pitch": pitch,
-        "circle_value": token,
-        "over": over_label,
-    }
-
-def build_live_over_summary(over_index, balls, score_state=None, lang="hinglish"):
-    """Natural Hindi-script Hinglish recap. It must see six legal balls to be eligible."""
-    unique = []
-    seen = set()
-    for ball in balls or []:
-        if not isinstance(ball, dict):
-            continue
-        raw_token = ball.get("circle_val")
-        if raw_token is None or str(raw_token).strip() == "":
-            raw_token = ball.get("runs")
-        token = "" if raw_token is None else str(raw_token).strip().upper()
-        over = str(ball.get("over") or "").strip()
-        seq = str(ball.get("browser_seq") or ball.get("seq") or "").strip()
-        key = (over, token, str(ball.get("matchup") or "").strip().lower(), seq)
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(token)
-
-    stats = over_stats_from_tokens(unique)
-    if stats.get("legal", 0) < 6:
-        return ""
-    score_state = score_state or {}
-    score_runs = _coerce_score_int(score_state.get("total_runs"))
-    score_wickets = _coerce_score_int(score_state.get("total_wickets"))
-    try:
-        spoken_over = int(over_index) + 1
-    except (TypeError, ValueError):
-        spoken_over = 1
-
-    over_runs = int(stats.get("runs", 0) or 0)
-    over_wickets = int(stats.get("wickets", 0) or 0)
-    fours = int(stats.get("fours", 0) or 0)
-    sixes = int(stats.get("sixes", 0) or 0)
-    ordinal = _over_nominative_hindi(spoken_over)
-
-    if over_runs == 0 and over_wickets == 0:
-        parts = [f"{ordinal} ओवर पूरा हुआ! इस ओवर में कोई रन नहीं आया। शानदार गेंदबाज़ी!"]
-    elif over_runs == 0:
-        parts = [
-            f"{ordinal} ओवर पूरा हुआ! विकेट मेडन ओवर—कोई रन नहीं आया और "
-            f"{number_to_hindi_words(over_wickets)} विकेट गिरा। शानदार गेंदबाज़ी!"
-        ]
-    else:
-        line = f"{ordinal} ओवर पूरा हुआ! इस ओवर में {number_to_hindi_words(over_runs)} रन आए"
-        details = []
-        if fours:
-            details.append(f"{number_to_hindi_words(fours)} " + ("चौका" if fours == 1 else "चौके"))
-        if sixes:
-            details.append(f"{number_to_hindi_words(sixes)} " + ("छक्का" if sixes == 1 else "छक्के"))
-        if over_wickets:
-            details.append(f"{number_to_hindi_words(over_wickets)} विकेट")
-        if details:
-            line += ", " + ", ".join(details)
-        parts = [line + "।"]
-
-    if score_runs is not None and score_wickets is not None:
-        parts.append(
-            f"स्कोर अब {number_to_hindi_words(score_runs)} रन, "
-            f"{number_to_hindi_words(score_wickets)} विकेट के नुकसान पर।"
-        )
-        crr = score_runs / max(spoken_over, 1)
-        crr_text = _numbers_as_hindi_words(f"{crr:.2f}")
-        high, mid = _rr_thresholds(_coerce_score_int(score_state.get("match_overs")))
-        if crr >= high:
-            parts.append(f"रन रेट {crr_text} प्रति ओवर है, रन बनाने की रफ्तार शानदार है।")
-        elif crr >= mid:
-            parts.append(f"रन रेट {crr_text} प्रति ओवर है, रन बनने की रफ्तार ठीक चल रही है।")
-        else:
-            parts.append(f"रन रेट {crr_text} प्रति ओवर है, अब रन बनाने की रफ्तार बढ़ानी होगी।")
-
-    batter_suffix = _web_batter_score_suffix(score_state)
-    if batter_suffix:
-        parts.append("बल्लेबाज़: " + batter_suffix + "।")
-    return " ".join(parts)
-
-class _WebCommentatorAdapter:
-    """Thin compatibility layer for server.py; reuses the uploaded Pro scripts."""
-    def classify(self, text="", runs=""):
-        token = str(runs or "").strip().upper()
-        delivery = classify_delivery(token)
-        level = 4 if delivery["kind"] == "wicket" or token == "6" else 3 if token == "4" else 2 if delivery["kind"] not in ("dot",) else 1
-        rate, pitch, _volume = AUDIO_PROFILES[level]
-        return {
-            "event": delivery["kind"],
-            "badge": delivery["kind"].upper(),
-            "rate": rate,
-            "pitch": pitch,
-            "should_speak": bool(token),
-        }
-
-    def humanize(self, raw_text="", ball_info=None, lang="hi", gemini_api_key=None):
-        return build_live_circle_announcement(ball_info or {}, lang=lang)
-
-    async def humanize_async(self, raw_text="", ball_info=None, lang="hi", gemini_api_key=None):
-        return self.humanize(raw_text, ball_info=ball_info, lang=lang, gemini_api_key=gemini_api_key)
-
-
-commentator = _WebCommentatorAdapter()
 
 
 if __name__ == "__main__":
