@@ -1322,45 +1322,158 @@ def main() -> None:
 # The Pro Commentary functions above are kept intact. This adapter
 # lets server.py call the same circle-driven scripts over WebSocket.
 # ============================================================
-def _web_circle_value(info):
-    value = info.get("circle_val")
-    if value is None or str(value).strip() == "":
-        value = info.get("runs", "")
-    return "" if value is None else str(value).strip().upper()
+def _numbers_as_hindi_words(text):
+    """Keep Hinglish wording while making every spoken numeral a Hindi word."""
+    def convert(match):
+        value = match.group(0)
+        if "." in value:
+            whole, fraction = value.split(".", 1)
+            fraction_words = " ".join(number_to_hindi_words(int(char)) for char in fraction)
+            return f"{number_to_hindi_words(int(whole))} दशमलव {fraction_words}"
+        return number_to_hindi_words(int(value))
+    return re.sub(r"(?<![A-Za-z0-9_])\d+(?:\.\d+)?(?![A-Za-z0-9_])", convert, str(text or ""))
 
 
-def _web_ball_names(info):
-    matchup = str(info.get("matchup") or "").strip()
-    bowler = str(info.get("bowler") or "").strip()
-    batsman = str(info.get("batsman") or info.get("striker") or "").strip()
-    parts = re.split(r"\s+to\s+", matchup, maxsplit=1, flags=re.IGNORECASE)
-    if len(parts) == 2:
-        bowler = parts[0].strip(" ,:.") or bowler
-        batsman = parts[1].strip(" ,:.") or batsman
-    elif "," in matchup:
-        left, right = matchup.split(",", 1)
-        bowler = left.strip(" ,:.") or bowler
-        batsman = re.sub(r"\s*(?:को|to)\s*$", "", right.strip(" ,:."), flags=re.IGNORECASE) or batsman
-    return bowler, batsman
+def _hinglish_ball_phrase(ball_str):
+    """Hinglish ball phrase with the over and ball numbers spoken in Hindi."""
+    try:
+        over_num, ball_idx = parse_ball(ball_str)
+    except Exception:
+        return "Agli ball"
+    ball_word = HINDI_BALL_WORDS.get(ball_idx, "अगली गेंद").replace(" गेंद", " ball")
+    return f"{over_ordinal_hindi(over_num)} over ki {ball_word}"
 
 
-def _web_batter_score_suffix(info):
-    """Only used at over end or wicket—not spoken after every delivery."""
-    players = []
-    for prefix in ("striker", "non_striker"):
-        name = str(info.get(prefix) or "").strip()
-        runs = info.get(f"{prefix}_runs")
-        balls = info.get(f"{prefix}_balls")
-        if not name or runs is None or balls is None or name.lower().startswith("batter "):
-            continue
-        try:
-            players.append(f"{name} {int(runs)} off {int(balls)}")
-        except (TypeError, ValueError):
-            continue
-    return ", ".join(players)
+def _hinglish_dismissal_line(how_out, bowler):
+    """Describe only the dismissal type supported by the available wicket card."""
+    details = re.sub(r"\s+", " ", str(how_out or "").strip().lower())
+    if "run out" in details or "runout" in details:
+        return "Run out! Running mein mix-up hua aur wicket chala gaya."
+    if "hit wicket" in details:
+        return "Hit wicket! Batsman ke apne bat ya body se stumps gir gaye."
+    if "lbw" in details:
+        return "LBW out! Umpire ne finger raise kar di."
+    if re.sdef build_live_circle_announcement(ball_info, lang="hi"):
+    """Build current delivery from the CREX circle; Hinglish preserves player names."""
+    info = ball_info or {}
+    token = _web_circle_value(info)
+    if not token:
+        return {"should_speak": False}
+
+    over_label = str(info.get("over") or info.get("ball") or "").strip()
+    bowler, batsman = _web_ball_names(info)
+    batsman = batsman or str(info.get("batter") or "").strip()
+    dismissal = (
+        info.get("last_dismissal")
+        or info.get("lastDismissal")
+        or info.get("dismissal_card")
+        or None
+    )
+    delivery = classify_delivery(token)
+    kind, n = delivery["kind"], int(delivery.get("runs", 0) or 0)
+    event_kind = "four" if kind == "runs" and n == 4 else "six" if kind == "runs" and n == 6 else kind
+    lang_key = str(lang or "hi").strip().lower()
+
+    if lang_key in {"hinglish", "hi-en", "hi_en"}:
+        phrase = _hinglish_ball_phrase(over_label)
+        if kind == "wicket":
+            card = dismissal or {}
+            batter_name = str(card.get("batter") or card.get("batsman") or batsman or "Batsman").strip()
+            batter_runs = str(card.get("runs", "") or "").strip()
+            batter_balls = str(card.get("balls", "") or "").strip()
+            score_line = ""
+            if batter_runs.isdigit() and batter_balls.isdigit():
+                score_line = (
+                    f" {number_to_hindi_words(int(batter_balls))} balls mein "
+                    f"{number_to_hindi_words(int(batter_runs))} runs bana kar"
+                )
+            spoken_text = (
+                f"{phrase}, Wicket! Wicket! {batter_name}{score_line} pavilion laut rahe hain. "
+                f"{_hinglish_dismissal_line(card.get('howOut', card.get('how_out', '')), bowler)}"
+            )
+            try:
+                spoken_text += f" Score {int(info.get('total_runs'))} for {int(info.get('total_wickets'))}."
+            except (TypeError, ValueError):
+                pass
+            batter_suffix = _web_batter_score_suffix(info)
+            if batter_suffix:
+                spoken_text += " Batters: " + batter_suffix + "."
+            level = 4
+        elif kind == "wide":
+            extra = " Extra run bhi mila." if n <= 1 else f" Extra {number_to_hindi_words(n)} runs mile."
+            spoken_text = f"{phrase}, wide ball! {bowler or 'Bowler'} ki line leg-side se bahar thi.{extra}"
+            level = 2
+        elif kind == "noball":
+            spoken_text = f"{phrase}, no-ball! {bowler or 'Bowler'} ne crease cross kar di. Agli ball par free hit."
+            level = 2
+        elif kind == "legbye":
+            spoken_text = f"{phrase}, leg-byes ke {number_to_hindi_words(n)} runs. Batsmen ne jaldi se run complete kiya."
+            level = 2
+        elif kind == "bye":
+            spoken_text = f"{phrase}, byes ke {number_to_hindi_words(n)} runs. Wicketkeeper se ball nikal gayi."
+            level = 2
+        elif n >= 6:
+            spoken_text = (
+                f"{phrase}, kya shot hai! {batsman or 'Batsman'} ne ball ko boundary ke bahar "
+                f"bhej diya—SIX! {bowler or 'Bowler'} ke liye mehengi ball."
+            )
+            level = 4
+        elif n == 4:
+            spoken_text = f"{phrase}, shandaar timing! {batsman or 'Batsman'} ne gap nikala aur ball boundary ke paar—FOUR!"
+            level = 3
+        elif n == 3:
+            spoken_text = f"{phrase}, teen runs! Badiya running between the wickets."
+            level = 2
+        elif n == 2:
+            spoken_text = f"{phrase}, do runs! Gap mein khela aur dono batsmen ne safely run complete kiye."
+            level = 2
+        elif n == 1:
+            spoken_text = f"{phrase}, ek run lekar strike rotate ki."
+            level = 2
+        else:
+            spoken_text = f"{phrase}, achchi line and length. Koi run nahi—dot ball."
+            level = 1
+        spoken_text = _numbers_as_hindi_words(spoken_text)
+    else:
+        spoken_text, level = generate_circle_ball_commentary(
+            over_label, token, bowler, batsman, dismissal
+        )
+        if kind == "wicket":
+            try:
+                spoken_text += f" Score {int(info.get('total_runs'))} for {int(info.get('total_wickets'))}."
+            except (TypeError, ValueError):
+                pass
+            batter_suffix = _web_batter_score_suffix(info)
+            if batter_suffix:
+                spoken_text += " " + batter_suffix + "."
+
+    badges = {
+        "dot": "DOT BALL",
+        "runs": "RUNS",
+        "four": "FOUR",
+        "six": "SIX",
+        "wide": "WIDE",
+        "noball": "NO BALL",
+        "legbye": "LEG BYE",
+        "bye": "BYE",
+        "wicket": "WICKET",
+    }
+    rate, pitch, _volume = AUDIO_PROFILES[min(max(int(level), 1), 4)]
+    return {
+        "spoken_text": spoken_text,
+        "source_text": "",
+        "should_speak": True,
+        "event": event_kind,
+        "badge": badges.get(event_kind, badges.get(kind, "BALL")),
+        "level": level,
+        "rate": rate,
+        "pitch": pitch,
+        "circle_value": token,
+        "over": over_label,
+    }
 
 
-def build_live_circle_announcement(ball_info, lang="hi"):
+ent(ball_info, lang="hi"):
     """Use the uploaded final.py manual scripts; never speak CREX source prose."""
     info = ball_info or {}
     token = _web_circle_value(info)
@@ -1439,13 +1552,16 @@ def build_live_over_summary(over_index, balls, score_state=None, lang="hinglish"
             raw_token = ball.get("runs")
         token = "" if raw_token is None else str(raw_token).strip().upper()
         over = str(ball.get("over") or "").strip()
-        key = (over, token, str(ball.get("matchup") or "").strip().lower())
+        seq = str(ball.get("browser_seq") or ball.get("seq") or "").strip()
+        key = (over, token, str(ball.get("matchup") or "").strip().lower(), seq)
         if key in seen:
             continue
         seen.add(key)
         unique.append(token)
 
     stats = over_stats_from_tokens(unique)
+    if stats.get("legal", 0) < 6:
+        return ""
     score_state = score_state or {}
     total_runs = score_state.get("total_runs")
     total_wickets = score_state.get("total_wickets")
@@ -1466,6 +1582,8 @@ def build_live_over_summary(over_index, balls, score_state=None, lang="hinglish"
     batter_suffix = _web_batter_score_suffix(score_state)
     if batter_suffix:
         summary += " Batters: " + batter_suffix + "."
+    if str(lang or "").lower() in {"hinglish", "hi-en", "hi_en", "hi", "hindi"}:
+        summary = _numbers_as_hindi_words(summary)
     return summary
 
 
