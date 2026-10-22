@@ -1,28 +1,10 @@
-#!/usr/bin/env python3
-"""
-PREET SPORTS - Professional Cricket Radio Engine (Pro Commentary Edition)
-=========================================================================
-- Voice : Microsoft Edge-TTS (hi-IN-MadhurNeural)
-- Effects : LIVE STADIUM MIXING (Sidechain compression, Reverb, Headset EQ)
-- Wicket: pairs the dismissal card with the batter on the delivery row
-- Radio : rich lines for 4, 6, wickets (caught / bowled / lbw / run out /
-          stumped), wides, no-balls and an over-by-over summary
-- Audio : native Windows MCI playback (8.3 short path, Python 3.14 safe)
+"""Fast, event-aware radio commentary for the Preet Sports broadcaster.
 
-Usage
------
-    python crex_radio_pro.py                 # asks for a CREX URL
-    python crex_radio_pro.py <CREX_URL>      # no prompt
-    python crex_radio_pro.py --demo          # speak sample 4/6/wicket/over lines
-    python crex_radio_pro.py <URL> --debug   # print raw page snapshots
-
-Setup
------
-    pip install edge-tts playwright
-    playwright install chromium
-    (Ensure ffmpeg is installed and added to Windows PATH)
+The web player speaks concise cricket-native calls rather than the long CREX
+source paragraph. Source commentary remains available to the visual feed.
 """
 from __future__ import annotations
+
 
 import asyncio
 import ctypes
@@ -35,29 +17,20 @@ import tempfile
 import subprocess
 import time
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 import edge_tts
 from playwright.async_api import Page, Route, async_playwright
 
-IS_WINDOWS = sys.platform == "win32"
-DEBUG = "--debug" in sys.argv
-DEMO = "--demo" in sys.argv
+from typing import Any, Dict, Optional
 
-# ============================================================
-# CONFIG
-# ============================================================
-DEFAULT_URL = (
-    "https://crex.com/cricket-live-score/"
-    "abd-vs-emb-2nd-semi-final-emirates-d10-league-2026-match-updates-14NA"
-)
-POLL_SECONDS = 2.0
-OVER_SETTLE_SECONDS = 2.5
-WICKET_CARD_WAIT_SECONDS = 1.2
+POLL_SECONDS = 0.35
+OVER_SETTLE_SECONDS = 0.6
+WICKET_CARD_WAIT_SECONDS = 0.45
 PAGE_LOAD_TIMEOUT_MS = 45_000
 RELOAD_AFTER_FAILURES = 5
-TTS_TIMEOUT_SECONDS = 25
+TTS_TIMEOUT_SECONDS = 8
 VOICE_NAME = "hi-IN-MadhurNeural"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -86,40 +59,13 @@ AUDIO_PROFILES = {
 
 log = logging.getLogger("crex_radio")
 
-
-# ============================================================
-# WINDOWS TUNING
-# ============================================================
-def disable_quickedit() -> None:
-    if not IS_WINDOWS:
-        return
-    try:
-        kernel32 = ctypes.windll.kernel32
-        h_stdin = kernel32.GetStdHandle(-10)
-        mode = ctypes.c_ulong()
-        kernel32.GetConsoleMode(h_stdin, ctypes.byref(mode))
-        kernel32.SetConsoleMode(h_stdin, mode.value & ~0x0040)
-    except Exception:
-        pass
+def _space(value: Any) -> str:
+    return " ".join(str(value or "").split()).strip()
 
 
-def prevent_sleep_and_throttle() -> None:
-    if not IS_WINDOWS:
-        return
-    try:
-        kernel32 = ctypes.windll.kernel32
-        kernel32.SetThreadExecutionState(0x80000000 | 0x00000001 | 0x00000040)
-        kernel32.SetPriorityClass(kernel32.GetCurrentProcess(), 0x00008000)
-    except Exception:
-        pass
+def _compact(value: Any) -> str:
+    return re.sub(r"[\s+]", "", _space(value).lower())
 
-
-def configure_stdio() -> None:
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
 
 
 # ============================================================
@@ -208,6 +154,7 @@ def format_over_phrase_hindi(ball_str: str) -> str:
         return "इस ओवर में"
 
 
+
 # ============================================================
 # MASTER PHONETIC DICTIONARY
 # ============================================================
@@ -278,6 +225,76 @@ def clean_player_name_to_hindi(raw_name: Optional[str]) -> str:
         result.append(word_hi if word_hi else word)
     return " ".join(result)
 
+
+def _number(token: str, default: int = 0) -> int:
+    match = re.search(r"\d+", token or "")
+    return int(match.group(0)) if match else default
+
+
+def _player_names(info: Dict[str, Any]) -> tuple[str, str]:
+    """Prefer the names attached to this delivery, especially on a wicket."""
+    matchup = _space(info.get("matchup"))
+    bowler = _space(info.get("bowler"))
+    batter = _space(info.get("batter") or info.get("striker"))
+
+    # CREX English layout: "Kagiso Rabada to Marnus Labuschagne".
+    parts = re.split(r"\s+to\s+", matchup, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) == 2:
+        bowler, batter = parts[0].strip(" ,:."), parts[1].strip(" ,:.")
+    elif "," in matchup:
+        # Hindi/localized CREX layout: "कागिसो रबाडा, मार्नस लाबुशाने को".
+        left, right = matchup.split(",", 1)
+        bowler = left.strip(" ,:.")
+        batter = re.sub(r"\s*(?:को|to)\s*$", "", right.strip(" ,:."), flags=re.IGNORECASE)
+
+    return bowler, batter
+
+def _active_batter_score(info: Dict[str, Any], lang: str) -> str:
+    """Compact live scorecard add-on; never uses CREX commentary prose."""
+    players = []
+    for prefix in ("striker", "non_striker"):
+        name = _space(info.get(prefix))
+        runs = info.get(f"{prefix}_runs")
+        balls = info.get(f"{prefix}_balls")
+        if not name or name.lower().startswith("batter ") or runs is None or balls is None:
+            continue
+        try:
+            runs_i, balls_i = int(runs), int(balls)
+        except (TypeError, ValueError):
+            continue
+        identity = _compact(name)
+        if any(item[0] == identity for item in players):
+            continue
+        players.append((identity, name, runs_i, balls_i))
+
+    if not players:
+        return ""
+    # Keep the score suffix short so Madhur can finish well before the next delivery.
+    batting_line = ", ".join(
+        f"{name} {runs} off {balls}" for _, name, runs, balls in players
+    )
+    team_runs, team_wickets = info.get("total_runs"), info.get("total_wickets")
+    try:
+        # Say the score naturally instead of reading the slash aloud.
+        score = f"{int(team_runs)} for {int(team_wickets)}"
+    except (TypeError, ValueError):
+        score = ""
+    # Keep score and batter figures in Hinglish even when the voice dropdown says Hindi.
+    return f"Score {score}. {batting_line}." if score else f"Batters: {batting_line}."
+
+def _wicket_type(source: str) -> str:
+    text = (source or "").lower()
+    if re.search(r"\b(run[\s-]?out|runout)\b|रन आउट", text):
+        return "runout"
+    if re.search(r"\b(stumped|stumping)\b|स्टंप्ड|स्टंपिंग", text):
+        return "stumped"
+    if re.search(r"\b(lbw|leg before wicket)\b|एलबीडब्ल्यू", text):
+        return "lbw"
+    if re.search(r"\b(bowled|clean bowled)\b|बोल्ड|स्टंप्स बिखर", text):
+        return "bowled"
+    if re.search(r"\b(caught|catch|catches)\b|कैच|पकड़ा|पकड़", text):
+        return "caught"
+    return "wicket"
 
 # ============================================================
 # DELIVERY BADGE PARSER
@@ -549,9 +566,9 @@ def generate_circle_ball_commentary(
 
     if kind == "wide":
         extra = f" अतिरिक्त {number_to_hindi_words(n)} रन।" if n > 1 else ""
-        return f"{over_phrase} {random.choice(WIDE_LINES)}{extra}", 2
+        return f"{ball_phrase}, {random.choice(WIDE_LINES)}{extra}", 2
     if kind == "noball":
-        return f"{over_phrase} {random.choice(NOBALL_LINES)}", 2
+        return f"{ball_phrase}, {random.choice(NOBALL_LINES)}", 2
 
     intro = build_intro(bowler, batsman)
     tag = ""
@@ -605,29 +622,32 @@ def build_over_summary(
     stats: Optional[dict] = None,
     match_overs: Optional[int] = None,
 ) -> str:
-    over_word = over_ordinal_hindi(over_int)
+    """Short Hinglish over recap with a naturally spoken current score."""
     parts: list[str] = []
 
     if stats and stats.get("legal", 0) >= 6:
-        if stats["runs"] == 0 and stats["wickets"] == 0:
-            parts.append(f"ओवर समाप्त! {over_word} ओवर मेडन! एक भी रन नहीं आया, कमाल की गेंदबाज़ी!")
-        elif stats["runs"] == 0:
-            wk = _count_phrase(stats["wickets"], "एक विकेट", "विकेट")
-            parts.append(f"ओवर समाप्त! विकेट मेडन! {over_word} ओवर में एक भी रन नहीं और {wk}! शानदार ओवर!")
+        over_runs = int(stats.get("runs", 0))
+        over_wickets = int(stats.get("wickets", 0))
+        fours = int(stats.get("fours", 0))
+        sixes = int(stats.get("sixes", 0))
+        if over_runs == 0 and over_wickets == 0:
+            parts.append(f"Over {over_int} complete—maiden over! Is over mein koi run nahi. Great bowling!")
+        elif over_runs == 0:
+            parts.append(f"Over {over_int} complete—wicket maiden! Koi run nahi, {over_wickets} wicket. Superb bowling!")
         else:
-            detail = []
-            if stats["sixes"]:
-                detail.append(_count_phrase(stats["sixes"], "एक छक्का", "छक्के"))
-            if stats["fours"]:
-                detail.append(_count_phrase(stats["fours"], "एक चौका", "चौके"))
-            if stats["wickets"]:
-                detail.append(_count_phrase(stats["wickets"], "एक विकेट", "विकेट"))
-            line = f"ओवर समाप्त! {over_word} ओवर में आए {number_to_hindi_words(stats['runs'])} रन"
-            if detail:
-                line += ", जिसमें " + _join_hindi(detail)
-            parts.append(line + "।")
+            details = []
+            if fours:
+                details.append(f"{fours} fours")
+            if sixes:
+                details.append(f"{sixes} sixes")
+            if over_wickets:
+                details.append(f"{over_wickets} wickets")
+            line = f"Over {over_int} complete! Is over mein {over_runs} runs aaye"
+            if details:
+                line += ", " + ", ".join(details)
+            parts.append(line + ".")
     else:
-        parts.append(f"ओवर समाप्त! {over_word} ओवर का खेल पूरा हुआ।")
+        parts.append(f"Over {over_int} complete.")
 
     try:
         runs_num = int(str(runs).strip())
@@ -635,27 +655,20 @@ def build_over_summary(
     except (TypeError, ValueError):
         return " ".join(parts)
 
-    runs_hi = number_to_hindi_words(runs_num)
-    if wkts_num == 0:
-        parts.append(f"स्कोर {runs_hi} रन, बिना किसी विकेट के नुकसान के।")
-    else:
-        parts.append(f"स्कोर {runs_hi} रन, {number_to_hindi_words(wkts_num)} विकेट के नुकसान पर।")
-
+    parts.append(f"Score {runs_num} for {wkts_num}.")
     crr = round(runs_num / max(over_int, 1), 2)
-    crr_hi = number_to_hindi_words(int(crr))
     high, mid = _rr_thresholds(match_overs)
     if crr >= high:
-        parts.append(f"करंट रन रेट {crr_hi} के पार पहुंच चुका है, बल्लेबाज़ पूरी तरह हावी हैं।")
+        parts.append(f"Run rate {crr:.2f} per over hai—batting side achchi position mein hai.")
     elif crr >= mid:
-        parts.append(f"रन गति लगभग {crr_hi} प्रति ओवर की है, दोनों टीमें अपनी रणनीति पर कायम हैं।")
+        parts.append(f"Run rate {crr:.2f} per over hai, scoring steady chal rahi hai.")
     else:
-        parts.append(f"रन गति {crr_hi} के आसपास थोड़ी धीमी है, अब बड़े शॉट्स की तलाश होगी।")
+        parts.append(f"Run rate {crr:.2f} per over hai—ab runs accelerate karne honge.")
 
     if match_overs and over_int < match_overs:
-        parts.append(f"पारी में अभी {number_to_hindi_words(match_overs - over_int)} ओवर बाकी हैं।")
+        parts.append(f"{match_overs - over_int} overs abhi baaki hain.")
 
     return " ".join(parts)
-
 
 def build_innings_end(runs, wkts) -> str:
     try:
@@ -666,643 +679,360 @@ def build_innings_end(runs, wkts) -> str:
         return "पारी समाप्त!"
 
 
-# ============================================================
-# WINDOWS MCI AUDIO ENGINE (short-path safe)
-# ============================================================
-def get_short_path_name(long_name: str) -> str:
-    output_buf_size = 260
-    output_buf = ctypes.create_unicode_buffer(output_buf_size)
-    get_short_path = ctypes.windll.kernel32.GetShortPathNameW
-    r = get_short_path(long_name, output_buf, output_buf_size)
-    return output_buf.value if r > 0 else long_name
+
+class HumanCommentator:
+    """Fast local phrase builder; no LLM/API call is made for each delivery."""
+
+    @staticmethod
+    def classify(text: str, runs: Any = "") -> Dict[str, str]:
+        """Classify strictly from CREX's delivery-circle value, never from prose."""
+        token = _compact(runs)
+        n = _number(token, 0)
+
+        # The circle/badge is the authority for the event. Do not let ordinary
+        # commentary containing words like "wicket" or "six" override a numeric circle.
+        if token in {"w", "wkt", "out", "wicket"}:
+            return {"event": "wicket", "badge": "⚡ WICKET", "rate": "+30%", "pitch": "+20Hz", "emotion": "high_energy"}
+        if "wd" in token or "wide" in token:
+            return {"event": "wide", "badge": "WIDE", "rate": "+20%", "pitch": "+12Hz", "emotion": "normal"}
+        if "nb" in token or "noball" in token or "no-ball" in token:
+            return {"event": "noball", "badge": "NO BALL", "rate": "+20%", "pitch": "+12Hz", "emotion": "normal"}
+        if "lb" in token or "legbye" in token:
+            return {"event": "legbye", "badge": "LEG BYE", "rate": "+20%", "pitch": "+12Hz", "emotion": "normal"}
+        if re.fullmatch(r"\d*b|b\d*", token) and token:
+            return {"event": "bye", "badge": "BYE", "rate": "+20%", "pitch": "+12Hz", "emotion": "normal"}
+
+        if token.isdigit():
+            if n == 0:
+                return {"event": "dot", "badge": "🛡️ DOT BALL", "rate": "+15%", "pitch": "+10Hz", "emotion": "calm"}
+            if n == 4:
+                return {"event": "four", "badge": "🎯 FOUR", "rate": "+25%", "pitch": "+15Hz", "emotion": "medium_energy"}
+            if n == 6:
+                return {"event": "six", "badge": "🔥 SIX", "rate": "+30%", "pitch": "+20Hz", "emotion": "high_energy"}
+            if n in {1, 2, 3, 5}:
+                return {"event": "runs", "badge": "🏏 RUNS", "rate": "+20%", "pitch": "+12Hz", "emotion": "normal"}
+        return {"event": "ball", "badge": "🏏 BALL", "rate": "+15%", "pitch": "+10Hz", "emotion": "normal"}
+
+    @staticmethod
+    def _radio_line(
+        source: str,
+        event: str,
+        token: str,
+        bowler: str,
+        batter: str,
+        lang: str,
+    ) -> str:
+        """Concise manual calls keyed only by the CREX circle token."""
+        hinglish = lang == "hinglish"
+        hindi = lang == "hi"
+        n = _number(token, 1)
+        bowler = bowler or ("bowler" if hinglish else "गेंदबाज़")
+        batter = batter or ("batter" if hinglish else "बल्लेबाज़")
+
+        if event == "wicket":
+            # The circle determines that a wicket happened; source wording is used
+            # only to identify the dismissal type when CREX supplies it.
+            kind = _wicket_type(source)
+            if hindi:
+                return {
+                    "caught": f"कैच आउट! {batter} की पारी खत्म, {bowler} को विकेट मिला!",
+                    "bowled": f"बोल्ड! {bowler} ने स्टंप्स बिखेर दिए, {batter} आउट!",
+                    "lbw": f"एलबीडब्ल्यू! बड़ी अपील, {batter} आउट!",
+                    "runout": f"रन आउट! शानदार फील्डिंग, {batter} को लौटना होगा!",
+                    "stumped": f"स्टंप्ड! विकेटकीपर ने मौका नहीं छोड़ा, {batter} आउट!",
+                    "wicket": f"विकेट! {batter} आउट, {bowler} को बड़ी सफलता!",
+                }[kind]
+            if hinglish:
+                return {
+                    "caught": f"Caught! {batter} की पारी खत्म—{bowler} को wicket मिला!",
+                    "bowled": f"Bowled! {bowler} ने stumps बिखेर दिए—{batter} आउट!",
+                    "lbw": f"LBW! Big appeal, finger up—{batter} आउट!",
+                    "runout": f"Run out! Sharp fielding—{batter} की पारी खत्म!",
+                    "stumped": f"Stumped! Keeper ने मौका नहीं छोड़ा—{batter} आउट!",
+                    "wicket": f"WICKET! {batter} आउट—{bowler} को breakthrough!",
+                }[kind]
+            return {
+                "caught": f"Caught! {batter} is gone. {bowler} gets the wicket!",
+                "bowled": f"Bowled! {bowler} knocks the stumps over. {batter} is out!",
+                "lbw": f"LBW! Big appeal, finger up. {batter} is out!",
+                "runout": f"Run out! Sharp fielding. {batter} is gone!",
+                "stumped": f"Stumped! Quick work by the keeper. {batter} is out!",
+                "wicket": f"Wicket! {batter} is out. A big breakthrough!",
+            }[kind]
+
+        if event == "six":
+            if hindi:
+                return random.choice((
+                    "उठाकर मारा! गेंद आसमान में, और ये गई स्टैंड्स में—छह रन!",
+                    f"क्या पावर हिटिंग! {batter} ने गेंद बाउंड्री के पार भेज दी—छक्का!",
+                    "बल्ले के बिल्कुल बीचों-बीच लगी, फील्डर देखते रह गए—छह रन!",
+                ))
+            if hinglish:
+                return random.choice((
+                    f"SIX! {batter} ने ball stands के पार भेज दी—क्या hit है!",
+                    f"Power hitting! {batter} ने गेंद सीधे rope के पार भेजी—six runs!",
+                ))
+            return f"SIX! {batter} launches it over the rope!"
+
+        if event == "four":
+            if hindi:
+                return random.choice((
+                    "कलाइयों का जादू! खूबसूरत प्लेसमेंट, गेंद रस्सी के पार—चार रन!",
+                    "गज़ब की टाइमिंग! फील्डर को हिलने का मौका नहीं, चौका!",
+                    "गैप मिला और गेंद सीधी बाउंड्री के पार—शानदार चौका!",
+                ))
+            if hinglish:
+                return random.choice((
+                    f"FOUR! Kya timing—{batter} ने ball boundary के पार भेजी!",
+                    "कलाइयों का जादू! Perfect placement—चार रन!",
+                ))
+            return f"FOUR! Beautiful timing from {batter}!"
+
+        if event == "wide":
+            if hindi:
+                return "वाइड! गेंद लाइन से बाहर, बल्लेबाज़ी टीम को अतिरिक्त रन।"
+            if hinglish:
+                return "Wide ball! Line se बाहर—batting side को extra मिला।"
+            return "Wide! An extra for the batting side."
+        if event == "noball":
+            if hindi:
+                return "नो-बॉल! एक्स्ट्रा रन और अगली गेंद पर फ्री हिट।"
+            if hinglish:
+                return "No-ball! Extra run, next ball free hit."
+            return "No-ball! An extra and a free hit."
+        if event == "legbye":
+            if hindi:
+                return f"लेग बाय के {number_to_hindi(n)} रन स्कोर में जुड़े।"
+            if hinglish:
+                return f"Leg-bye ke {n} runs, score आगे बढ़ा।"
+            return f"{n} leg-byes added."
+        if event == "bye":
+            if hindi:
+                return f"बाय के {number_to_hindi(n)} रन, स्कोर आगे बढ़ा।"
+            if hinglish:
+                return f"Bye ke {n} runs, score आगे बढ़ा।"
+            return f"{n} byes added."
+        if event == "dot":
+            if hindi:
+                return "कसी हुई लाइन और लेंथ—कोई रन नहीं, डॉट बॉल!"
+            if hinglish:
+                return "Tight line aur length—dot ball, koi run nahi!"
+            return f"Good line and length from {bowler}. No run."
+        if event == "runs":
+            if n == 1:
+                if hindi:
+                    return random.choice((
+                        "हल्के हाथों से कवर्स की ओर खेला और तेज़ी से एक सिंगल पूरा किया।",
+                        "कलाइयों को मोड़कर स्ट्राइक रोटेट की, आसानी से एक रन चुरा लिया।",
+                        "गेंद को गैप में धकेला और एक रन लेकर स्ट्राइक बदल ली।",
+                    ))
+                if hinglish:
+                    return random.choice((
+                        "Soft hands, quick running—एक single पूरा किया!",
+                        "Gap में push किया और strike rotate कर ली—one run!",
+                    ))
+                return "Quick single, strike rotates."
+            if n == 2:
+                if hindi:
+                    return random.choice((
+                        "गैप में खेलकर दो फील्डर्स के बीच से बढ़िया रनिंग, दो रन पूरे!",
+                        "सॉफ्ट हैंड्स से धकेला, बढ़िया तालमेल और दौड़कर दो रन निकाले!",
+                    ))
+                if hinglish:
+                    return "Gap में shot, sharp running—दो runs पूरे!"
+                return "Two runs, good running."
+            if n == 3:
+                if hindi:
+                    return "शानदार रनिंग बिटवीन द विकेट्स—तीन रन पूरे!"
+                if hinglish:
+                    return "Excellent running between the wickets—three runs!"
+                return "Three runs, excellent running."
+            if n == 5:
+                if hindi:
+                    return "पाँच रन! ओवरथ्रो या शानदार दौड़, बल्लेबाज़ों ने पाँच रन बटोर लिए!"
+                if hinglish:
+                    return "Five runs! Smart running या overthrow—score तेज़ी से आगे!"
+                return "Five runs! Smart running."
+
+        if hindi:
+            return f"{batter} ने गेंद खेली।"
+        if hinglish:
+            return f"{batter} ने ball खेली।"
+        return f"{batter} plays the ball."
+
+    def humanize(
+        self,
+        raw_text: str,
+        ball_info: Optional[Dict[str, Any]] = None,
+        lang: str = "hinglish",
+        gemini_api_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        info = ball_info or {}
+        # Circle value is the single source of truth for the spoken event.
+        # "runs" remains a backward-compatible fallback for existing parsers.
+        source = _space(info.get("commentary") or raw_text)
+        runs = _space(info.get("circle_val") or info.get("runs", ""))
+        token = _compact(runs)
+        event_info = self.classify("", token)
+
+        over_text = _space(info.get("over"))
+        match = re.search(r"(\d+)\.(\d+)", over_text)
+        over_number = int(match.group(1)) + 1 if match else None
+        ball_number = int(match.group(2)) if match else None
+        is_legal_ball = not any(k in token for k in ("wd", "wide", "nb", "noball", "no-ball"))
+        is_over_end = ball_number == 6 and is_legal_ball
+        is_over_start = ball_number == 1
+
+        bowler, batter = _player_names(info)
+        spoken_text = self._radio_line(source, event_info["event"], token, bowler, batter, lang)
+
+        # Prefix the ball number using the same completed-over convention as final.py.
+        if over_number is not None and ball_number is not None:
+            if lang == "hinglish":
+                ball_word = {1: "pehli", 2: "doosri", 3: "teesri", 4: "chauthi", 5: "paanchvi", 6: "aakhri"}.get(ball_number, str(ball_number))
+                spoken_text = f"Over {over_number} ki {ball_word} ball. {spoken_text}"
+            elif lang == "hi":
+                ball_word = {1: "पहली गेंद", 2: "दूसरी गेंद", 3: "तीसरी गेंद", 4: "चौथी गेंद", 5: "पाँचवीं गेंद", 6: "आखिरी गेंद"}.get(ball_number, f"{ball_number}वीं गेंद")
+                over_word = {1: "पहले", 2: "दूसरे", 3: "तीसरे", 4: "चौथे", 5: "पाँचवें", 6: "छठे", 7: "सातवें", 8: "आठवें", 9: "नौवें", 10: "दसवें", 20: "बीसवें"}.get(over_number, f"{over_number}वें")
+                spoken_text = f"{over_word} ओवर की {ball_word}। {spoken_text}"
+            else:
+                spoken_text = f"Over {over_number}, ball {ball_number}. {spoken_text}"
+
+        # Only append the scorecard on a wicket or the sixth legal delivery.
+        is_over_end = bool(
+            ball_number == 6
+            and not any(k in token for k in ("wd", "wide", "nb", "noball", "no-ball"))
+        )
+        if event_info["event"] == "wicket" or is_over_end:
+            score_context = _active_batter_score(info, lang)
+            if score_context:
+                spoken_text = f"{spoken_text} {score_context}"
+
+        return {
+            "spoken_text": spoken_text,
+            "source_text": source,
+            "circle_val": token,
+            "should_speak": bool(token),
+            **event_info,
+            "bowler": bowler,
+            "batter": batter,
+            "is_over_start": is_over_start,
+            "is_over_end": is_over_end,
+            "completed_overs": over_number if is_over_end else None,
+        }
+
+    async def humanize_async(
+        self,
+        raw_text: str,
+        ball_info: Optional[Dict[str, Any]] = None,
+        lang: str = "hinglish",
+        gemini_api_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self.humanize(raw_text, ball_info, lang, gemini_api_key)
 
 
-def play_mp3_native_windows(mp3_path: str) -> None:
-    winmm = ctypes.windll.winmm
-    alias = f"track_{os.getpid()}_{int(time.time() * 1000) % 10000}"
-    safe_path = get_short_path_name(os.path.abspath(mp3_path))
-
-    winmm.mciSendStringW("close all", None, 0, 0)
-
-    ret = winmm.mciSendStringW(f'open "{safe_path}" type mpegvideo alias {alias}', None, 0, 0)
-    if ret != 0:
-        ret = winmm.mciSendStringW(f"open {safe_path} alias {alias}", None, 0, 0)
-        if ret != 0:
-            return
-
-    winmm.mciSendStringW(f"play {alias} wait", None, 0, 0)
-    winmm.mciSendStringW(f"close {alias}", None, 0, 0)
+commentator = HumanCommentator()
 
 
-# ============================================================
-# BROADCAST MIXER & HUMANIZER
-# ============================================================
-def apply_stadium_effects(raw_voice_path: str, output_path: str) -> bool:
-    """Applies sidechain compression ducking and stadium headset echo via FFmpeg."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    crowd_bg = os.path.join(script_dir, "stadium_ambience.wav")
+def build_live_circle_announcement(
+    ball_info: Dict[str, Any],
+    lang: str = "hi",
+) -> Dict[str, Any]:
+    """Use final.py's handcrafted radio scripts; circle token alone selects the delivery."""
+    info = dict(ball_info or {})
+    ball_num = _space(info.get("over"))
+    token = _space(info.get("circle_val") or info.get("runs")).upper()
+    d = classify_delivery(token)
 
-    # Failsafe: Create silent dummy track if stadium file is missing so script never crashes
-    if not os.path.exists(crowd_bg):
-        subprocess.run([
-            "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "5", crowd_bg
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    bowler = _space(info.get("bowler"))
+    batter = _space(info.get("batsman") or info.get("batter"))
+    matchup = _space(info.get("matchup"))
+    parts = re.split(r"\s+to\s+", matchup, maxsplit=1, flags=re.IGNORECASE)
+    if len(parts) == 2:
+        bowler = bowler or parts[0].strip(" ,:.")
+        batter = batter or parts[1].strip(" ,:.")
+    bowler = bowler or _space(info.get("current_bowler"))
+    batter = batter or _space(info.get("striker"))
 
-    filter_complex = (
-        "[0:a]highpass=f=300,lowpass=f=4000,aecho=0.8:0.88:100|150:0.4|0.3,volume=1.5[voice_fx];"
-        "[1:a]volume=0.8[crowd_bg];"
-        "[crowd_bg][voice_fx]sidechaincompress=threshold=0.05:ratio=8:attack=10:release=400[ducked_crowd];"
-        "[voice_fx][ducked_crowd]amix=inputs=2:duration=first:normalize=0[out]"
+    dismissal = info.get("last_dismissal") or info.get("lastDismissal") or {}
+    speech, level = generate_circle_ball_commentary(
+        ball_num,
+        token,
+        bowler or None,
+        batter or None,
+        dismissal if isinstance(dismissal, dict) else None,
     )
 
-    command = [
-        "ffmpeg", "-y",
-        "-i", raw_voice_path,
-        "-stream_loop", "-1",
-        "-i", crowd_bg,
-        "-filter_complex", filter_complex,
-        "-map", "[out]",
-        "-c:a", "libmp3lame", "-q:a", "2",
-        "-ar", "44100",
-        output_path
-    ]
+    # Score and batter figures are announced ONLY after a wicket or the final legal
+    # ball of an over. Routine singles, dots, boundaries and extras get only the
+    # short manual circle call so the voice can keep up.
+    over_match = re.search(r"(\d+)\.(\d+)", ball_num)
+    is_over_end = bool(
+        over_match
+        and int(over_match.group(2)) == 6
+        and d.get("legal", True)
+    )
+    announce_score = d["kind"] == "wicket" or is_over_end
 
-    try:
-        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except Exception as e:
-        log.error(f"FFmpeg Stadium Mix failed: {e}")
-        return False
+    # Do not copy any scraped CREX commentary sentence into the voice text.
+    if announce_score:
+        score_parts = []
+        try:
+            team_runs = int(info.get("total_runs"))
+            team_wickets = int(info.get("total_wickets"))
+            score_parts.append(f"Score {team_runs} for {team_wickets}.")
+        except (TypeError, ValueError):
+            pass
 
-def humanize_text(text: str) -> str:
-    """Forces the AI to 'breathe' like a human by injecting micro-pauses at punctuation."""
-    clean = re.sub(r"<[^>]+>", " ", text).replace("\r", " ").replace("\n", " ").strip()
-    clean = clean.replace("!", "!... ")
-    clean = clean.replace("।", "।... ")
-    clean = clean.replace(",", ",... ")
-    return clean
-
-
-async def generate_and_play_audio(text: str, rate_level: int = 2) -> None:
-    if not IS_WINDOWS:
-        log.warning("Audio playback needs Windows (text only on this OS).")
-        return
-
-    clean_text = humanize_text(text)
-    
-    # Unpack all three variables (rate, pitch, volume) from your updated AUDIO_PROFILES
-    rate_str, pitch_str, vol_str = AUDIO_PROFILES[min(max(rate_level, 1), 4)] 
-    
-    temp_dir = tempfile.gettempdir()
-    raw_mp3 = os.path.join(temp_dir, f"_raw_{os.getpid()}_{time.time_ns()}.mp3")
-    mixed_mp3 = os.path.join(temp_dir, f"_mixed_{os.getpid()}_{time.time_ns()}.mp3")
-
-    try:
-        for attempt in (1, 2):
+        batter_parts = []
+        for prefix in ("striker", "non_striker"):
+            name = _space(info.get(prefix))
+            runs_value = info.get(f"{prefix}_runs")
+            balls_value = info.get(f"{prefix}_balls")
+            if not name or runs_value is None or balls_value is None or name.lower().startswith("batter "):
+                continue
             try:
-                # Pass the volume=vol_str argument directly into the Communicate object
-                comm = edge_tts.Communicate(
-                    clean_text, 
-                    VOICE_NAME, 
-                    rate=rate_str, 
-                    pitch=pitch_str, 
-                    volume=vol_str
-                )
-                await asyncio.wait_for(comm.save(raw_mp3), timeout=TTS_TIMEOUT_SECONDS)
-                break
-            except Exception as e:
-                log.warning("TTS attempt %d failed: %s", attempt, e)
-                if attempt == 2:
-                    return
-                await asyncio.sleep(0.5)
+                batter_parts.append(f"{name} {int(runs_value)} off {int(balls_value)}")
+            except (TypeError, ValueError):
+                continue
+        if batter_parts:
+            score_parts.append(", ".join(batter_parts) + ".")
+        if score_parts:
+            speech = f"{speech} {' '.join(score_parts)}"
 
-        # APPLY THE PROFESSIONAL BROADCAST MIX
-        loop = asyncio.get_running_loop()
-        success = await loop.run_in_executor(None, apply_stadium_effects, raw_mp3, mixed_mp3)
-        final_audio = mixed_mp3 if success else raw_mp3
-
-        # PLAY IT VIA WINDOWS MCI
-        await loop.run_in_executor(None, play_mp3_native_windows, final_audio)
-        
-    except Exception as e:
-        log.error("TTS Audio Error: %s", e)
-    finally:
-        for f in (raw_mp3, mixed_mp3):
-            if os.path.exists(f):
-                try:
-                    os.remove(f)
-                except OSError:
-                    pass
-
-
-class RadioAnnouncer:
-    def __init__(self) -> None:
-        self._queue: asyncio.Queue[tuple[str, int]] = asyncio.Queue()
-        self._task: Optional[asyncio.Task] = None
-
-    def start(self) -> None:
-        self._task = asyncio.create_task(self._worker(), name="radio_announcer")
-
-    async def say(self, text: str, rate_level: int = 2, droppable: bool = False) -> None:
-        if droppable and self._queue.qsize() >= MAX_BACKLOG_FOR_MINOR_BALLS:
-            log.info("Skipping minor commentary (queue backlog)")
-            return
-        await self._queue.put((text, rate_level))
-
-    async def wait_idle(self) -> None:
-        await self._queue.join()
-
-    async def stop(self) -> None:
-        if self._task:
-            self._task.cancel()
-            try:
-                await self._task
-            except asyncio.CancelledError:
-                pass
-            self._task = None
-
-    async def _worker(self) -> None:
-        while True:
-            text, rate_level = await self._queue.get()
-            try:
-                print(f"\n🎙️ [MADHUR RADIO PRO | LEVEL {rate_level}]: {text}")
-                await generate_and_play_audio(text, rate_level)
-            except asyncio.CancelledError:
-                raise
-            except Exception:
-                pass
-            finally:
-                self._queue.task_done()
-
-
-# ============================================================
-# LIVE MATCH & DOM EXTRACTOR
-# ============================================================
-@dataclass(frozen=True)
-class BallSnapshot:
-    ball: Optional[str]
-    circle_val: Optional[str]
-    bowler: str
-    batsman: str
-    runs: Optional[int]
-    wkts: Optional[int]
-    is_over_complete: bool = False
-    is_innings_break: bool = False
-    last_dismissal: Optional[dict] = None
-    seq: Optional[str] = None
-    over_balls: Optional[list] = None
-
-    @property
-    def has_ball(self) -> bool:
-        return bool(self.ball and self.circle_val)
-
-
-@dataclass
-class MatchState:
-    last_key: Optional[str] = None
-    last_wkts: Optional[int] = None
-    innings_break_seen: bool = False
-    match_overs: Optional[int] = None
-
-
-EXTRACT_JS = r'''() => {
-    let ballNum = null;
-    let seq = null;
-    let circleVal = null;
-    let bowler = '';
-    let batsman = '';
-    let runs = null;
-    let wkts = null;
-    let isOverComplete = false;
-    let isInningsBreak = false;
-    let lastDismissal = null;
-    let activeBalls = [];
-
-    const bodyText = document.body ? document.body.innerText : '';
-    const title = document.title || '';
-    const EXTRA_RE = /(?:wd|wide|nb|no\s*ball)/i;
-    const BALL_TOKEN = /^(?:[0-6]|w|wkt|out|wd|wide|nb|no\s*ball|lb|b|•|\d+\s*(?:wd|nb|lb|b)|(?:wd|nb|lb|b)\s*\+?\s*\d+)$/i;
-
-    if (/\((?:10\.0\vert{}20\.0\vert{}50\.0)\)/.test(title) || /Innings Break/i.test(bodyText) || /-10\b/.test(title)) {
-        isInningsBreak = true;
-    }
-
-    let latestOverNum = null;
-    const overRows = document.querySelectorAll(
-        'div[class*="over-card"], div[class*="recent-over"], div[class*="overRow"], div[class*="overWrap"], div[class*="over"]'
-    );
-    for (const row of overRows) {
-        const rowText = row.innerText || '';
-        const m = rowText.match(/\bOver\s+(\d+)\b/i);
-        if (!m) continue;
-        const parsedOver = parseInt(m[1], 10);
-        const rowBalls = [];
-        const nodes = row.querySelectorAll('span, b, div[class*="ball"], div[class*="circle"]');
-        for (const node of nodes) {
-            if (node.children.length !== 0) continue;
-            const val = (node.innerText || '').trim();
-            if (BALL_TOKEN.test(val)) rowBalls.push(val);
-        }
-        if (rowBalls.length > 0 && rowBalls.length <= 12) {
-            latestOverNum = parsedOver - 1;
-            activeBalls = rowBalls;
-        }
-    }
-
-    if (latestOverNum !== null && activeBalls.length > 0) {
-        let legalDeliveries = 0;
-        for (const v of activeBalls) {
-            if (!EXTRA_RE.test(v)) legalDeliveries++;
-        }
-        const clamped = Math.min(Math.max(legalDeliveries, 1), 6);
-        ballNum = `${latestOverNum}.${clamped}`;
-        seq = `${latestOverNum}:${activeBalls.length}`;
-        circleVal = activeBalls[activeBalls.length - 1];
-        if (legalDeliveries === 6 && !EXTRA_RE.test(circleVal)) {
-            isOverComplete = true;
-        }
-    }
-
-    if (!ballNum) {
-        const titleOversMatch = title.match(/\((\d{1,2}\.([1-6]))\)/);
-        if (titleOversMatch) ballNum = titleOversMatch[1];
-    }
-
-    const toRe = /([A-Za-z'\-]+(?: [A-Za-z'\-]+){0,3})\s+to\s+([A-Za-z'\-]+(?: [A-Za-z'\-]+){0,3})(?:,|\n|$)/i;
-    const commItems = document.querySelectorAll(
-        'div[class*="item"], div[class*="update"], div[class*="comm-card"], div[class*="row"]'
-    );
-    for (const el of commItems) {
-        const text = el.innerText || '';
-        if (text.length > 400) continue;
-        const matchTo = text.match(toRe);
-        if (matchTo) {
-            bowler = matchTo[1].replace(/^(?:(?:WKT|WD|NB|LB|OUT|W|B)\s+)+/i, '').trim();
-            batsman = matchTo[2].trim();
-            if (!circleVal) {
-                const badgeEl = el.querySelector('span[class*="run"], span[class*="badge"], div[class*="run"]');
-                if (badgeEl) circleVal = badgeEl.innerText.trim();
-            }
-            break;
-        }
-    }
-
-    const allDivs = document.querySelectorAll('div');
-    for (const d of allDivs) {
-        const txt = d.innerText || '';
-        if (txt.length > 300 || txt.length < 8) continue;
-        if (txt.includes('Wkt #') || (txt.includes('OUT') && (txt.includes(' b ') || txt.includes('c ')))) {
-            const cardMatch = txt.match(/([A-Za-z][A-Za-z .'\-]{1,30}?)\s*(\d{1,3})\s*\(\s*(\d{1,3})\s*\)/);
-            if (cardMatch) {
-                const rawName = cardMatch[1]
-                    .replace(/\bOUT\b|\bWkt\s*#?\d*\b/gi, '')
-                    .replace(/\s+/g, ' ')
-                    .trim();
-                const bRuns = cardMatch[2].trim();
-                const bBalls = cardMatch[3].trim();
-
-                let howOut = '';
-                const howM = txt.match(
-                    /(c\s*&\s*b\s+[A-Za-z' .\-]+|\bc\s+[A-Za-z' .\-]+?\s+b\s+[A-Za-z' .\-]+|\bst\s+[A-Za-z' .\-]+?\s+b\s+[A-Za-z' .\-]+|lbw(?:\s+b\s+[A-Za-z' .\-]+)?|run\s*out|hit\s*wicket|\bb\s+[A-Za-z' .\-]+)/i
-                );
-                if (howM) howOut = howM[1].replace(/\s+/g, ' ').trim();
-
-                lastDismissal = { batter: rawName, runs: bRuns, balls: bBalls, howOut: howOut };
-                break;
-            }
-        }
-    }
-
-    const titleScoreMatch = title.match(/([A-Za-z0-9\-]+)\s+(\d{1,3})\s*[-/]\s*([0-9]|10)\s*\(/);
-    if (titleScoreMatch) {
-        runs = parseInt(titleScoreMatch[2], 10);
-        wkts = parseInt(titleScoreMatch[3], 10);
-    }
-    if (runs === null) {
-        const topScoreCards = document.querySelectorAll(
-            'div[class*="team-score"], div[class*="score-card"], div[class*="match-header"]'
-        );
-        for (const c of topScoreCards) {
-            const t = c.innerText || '';
-            const m = t.match(/([A-Za-z0-9\-]+)\s+(\d{1,3})\s*[-/]\s*([0-9]|10)\b/);
-            if (m) {
-                runs = parseInt(m[2], 10);
-                wkts = parseInt(m[3], 10);
-                break;
-            }
-        }
-    }
+    rate, pitch, volume = AUDIO_PROFILES.get(level, AUDIO_PROFILES[1])
+    event_kind = d["kind"]
+    if event_kind == "runs" and d["runs"] == 4:
+        badge = "FOUR"
+    elif event_kind == "runs" and d["runs"] >= 6:
+        badge = "SIX"
+    elif event_kind == "wicket":
+        badge = "WICKET"
+    elif event_kind == "wide":
+        badge = "WIDE"
+    elif event_kind == "noball":
+        badge = "NO BALL"
+    elif event_kind == "legbye":
+        badge = "LEG BYE"
+    elif event_kind == "bye":
+        badge = "BYE"
+    elif event_kind == "dot":
+        badge = "DOT BALL"
+    else:
+        badge = "RUNS"
 
     return {
-        ball: ballNum,
-        seq: seq,
-        circleVal: circleVal,
-        bowler: bowler,
-        batsman: batsman,
-        runs: runs,
-        wkts: wkts,
-        isOverComplete: isOverComplete,
-        isInningsBreak: isInningsBreak,
-        lastDismissal: lastDismissal,
-        overBalls: activeBalls
-    };
-}'''
+        "spoken_text": " ".join(speech.split()),
+        "circle_value": token,
+        "event": event_kind,
+        "badge": badge,
+        "level": level,
+        "rate": rate,
+        "pitch": pitch,
+        "volume": volume,
+        "bowler": bowler,
+        "batter": batter,
+        "over": ball_num,
+        "should_speak": bool(token),
+    }
 
-
-async def extract_circle_balls_data(page: Page) -> Optional[BallSnapshot]:
-    try:
-        raw = await page.evaluate(EXTRACT_JS)
-        if not raw:
-            return None
-        return BallSnapshot(
-            ball=raw.get("ball"),
-            circle_val=raw.get("circleVal"),
-            bowler=raw.get("bowler") or "",
-            batsman=raw.get("batsman") or "",
-            runs=raw.get("runs"),
-            wkts=raw.get("wkts"),
-            is_over_complete=raw.get("isOverComplete", False),
-            is_innings_break=raw.get("isInningsBreak", False),
-            last_dismissal=raw.get("lastDismissal"),
-            seq=raw.get("seq"),
-            over_balls=raw.get("overBalls") or [],
-        )
-    except Exception as exc:
-        if DEBUG:
-            log.warning("extract failed: %s", exc)
-        return None
-
-
-# ============================================================
-# NETWORK RESOURCE FILTER
-# ============================================================
-async def route_filter(route: Route) -> None:
-    req = route.request
-    if req.resource_type in BLOCKED_RESOURCE_TYPES:
-        await route.abort()
-        return
-    url_lower = req.url.lower()
-    if any(pattern in url_lower for pattern in BLOCKED_URL_PATTERNS):
-        await route.abort()
-        return
-    await route.continue_()
-
-
-# ============================================================
-# MAIN COMMENTARY LOOP
-# ============================================================
-def print_status(message: str) -> None:
-    print(f"\r{message:<70}", end="", flush=True)
-
-
-async def open_match_page(page: Page, target_url: str) -> None:
-    try:
-        await page.goto(target_url, wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
-        await page.wait_for_timeout(3000)
-    except Exception as exc:
-        print("Page load notice:", exc)
-
-
-def is_backwards(prev: Optional[str], cur: Optional[str]) -> bool:
-    try:
-        po, pc = (int(x) for x in (prev or "").split(":"))
-        co, cc = (int(x) for x in (cur or "").split(":"))
-    except ValueError:
-        return False
-    return co == po and cc < pc
-
-
-async def announce_over_end(
-    page: Page, announcer: RadioAnnouncer, snap: BallSnapshot, state: MatchState
-) -> None:
-    await asyncio.sleep(OVER_SETTLE_SECONDS)
-    fresh = await extract_circle_balls_data(page)
-    runs = fresh.runs if fresh and fresh.runs is not None else snap.runs
-    wkts = fresh.wkts if fresh and fresh.wkts is not None else snap.wkts
-
-    over_int = int(snap.ball.split(".")[0]) + 1
-    stats = over_stats_from_tokens(snap.over_balls)
-    print(f"\n📊 Over {over_int} done | score {runs}/{wkts} | over stats {stats}")
-    msg = build_over_summary(over_int, runs, wkts, stats, state.match_overs)
-    print("📢 OVER ANNOUNCEMENT:", msg)
-    await announcer.say(msg, 2)
-
-
-async def handle_new_ball(
-    page: Page, announcer: RadioAnnouncer, snap: BallSnapshot, state: MatchState
-) -> None:
-    assert snap.ball and snap.circle_val
-    d = classify_delivery(snap.circle_val)
-    kind = d["kind"]
-
-    print("\n" + "=" * 65)
-    print(f"🏏 BALL: {snap.ball} | BADGE: [{snap.circle_val}] | {snap.bowler} to {snap.batsman}")
-
-    dismissal_data = snap.last_dismissal
-    after_score: Optional[tuple[int, int]] = None
-    if kind == "wicket":
-        await asyncio.sleep(WICKET_CARD_WAIT_SECONDS)
-        fresh = await extract_circle_balls_data(page)
-        if fresh:
-            if fresh.last_dismissal:
-                dismissal_data = fresh.last_dismissal
-            if (
-                fresh.runs is not None
-                and fresh.wkts is not None
-                and state.last_wkts is not None
-                and fresh.wkts > state.last_wkts
-            ):
-                after_score = (fresh.runs, fresh.wkts)
-                state.last_wkts = fresh.wkts
-
-    if dismissal_data:
-        print(f"🎯 WICKET DETAILS: {dismissal_data}")
-    print("=" * 65)
-
-    text, level = generate_circle_ball_commentary(
-        snap.ball, snap.circle_val, snap.bowler, snap.batsman, dismissal_data
-    )
-    if after_score:
-        text += " " + score_after_wicket_phrase(*after_score)
-    print("🇮🇳 RADIO HINGLISH:", text)
-
-    droppable = kind == "dot" or (kind == "runs" and d["runs"] in (1, 2, 3))
-    await announcer.say(text, level, droppable=droppable)
-
-    if snap.is_over_complete:
-        await announce_over_end(page, announcer, snap, state)
-
-
-async def monitor_loop(page: Page, announcer: RadioAnnouncer, state: MatchState) -> None:
-    failures = 0
-
-    while True:
-        try:
-            snap = await extract_circle_balls_data(page)
-
-            if snap and snap.has_ball:
-                key = snap.seq or snap.ball
-
-                if DEBUG and key != state.last_key:
-                    print(f"\n[debug] {snap}")
-
-                if state.last_key is None and not ANNOUNCE_LAST_BALL_ON_START:
-                    state.last_key = key
-                    print(f"\n🔕 Synced at ball {snap.ball} [{snap.circle_val}] - commentary starts from the next delivery")
-                elif key != state.last_key:
-                    if is_backwards(state.last_key, key):
-                        log.info("Ignoring backwards page update %s -> %s", state.last_key, key)
-                    else:
-                        state.last_key = key
-                        await handle_new_ball(page, announcer, snap, state)
-                else:
-                    print_status(f"⏳ Monitoring... Last ball: {snap.ball} [{snap.circle_val}]")
-            else:
-                print_status("⏳ Waiting for circle balls strip to update...")
-
-            if snap:
-                if snap.is_innings_break and not state.innings_break_seen and state.last_key is not None:
-                    state.innings_break_seen = True
-                    msg = build_innings_end(snap.runs, snap.wkts)
-                    print("\n📢", msg)
-                    await announcer.say(msg, 3)
-                elif not snap.is_innings_break:
-                    state.innings_break_seen = False
-                if snap.wkts is not None:
-                    state.last_wkts = snap.wkts
-
-            failures = 0
-            await asyncio.sleep(POLL_SECONDS)
-
-        except asyncio.CancelledError:
-            raise
-        except Exception as exc:
-            failures += 1
-            log.warning("Loop error (%d in a row): %s", failures, exc)
-            if failures >= RELOAD_AFTER_FAILURES:
-                try:
-                    await page.reload(wait_until="domcontentloaded", timeout=PAGE_LOAD_TIMEOUT_MS)
-                except Exception:
-                    pass
-                failures = 0
-            await asyncio.sleep(3)
-
-
-async def run_live_stream(target_url: str) -> None:
-    print("=" * 65)
-    print("🏏 PREET SPORTS - PROFESSIONAL CREX RADIO ENGINE")
-    print("🎙 VOICE: Microsoft Madhur Neural (Pro Commentary)")
-    print("=" * 65)
-    print(f"🎯 TARGET URL: {target_url}\n")
-
-    state = MatchState(match_overs=guess_match_overs(target_url))
-    if state.match_overs:
-        print(f"📋 Format detected from URL: {state.match_overs}-over match")
-    print("🚀 Initializing browser...")
-
-    announcer = RadioAnnouncer()
-    announcer.start()
-
-    try:
-        async with async_playwright() as p:
-            browser = await p.chromium.launch(
-                headless=True,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                    "--disable-gpu",
-                ],
-            )
-            try:
-                context = await browser.new_context(
-                    viewport={"width": 1280, "height": 800},
-                    user_agent=USER_AGENT,
-                )
-                page = await context.new_page()
-                await page.route("**/*", route_filter)
-
-                print("🌐 Connecting to CREX Match URL...")
-                await open_match_page(page, target_url)
-
-                print("✅ CONNECTED TO CREX")
-                print("🔴 LIVE COMMENTARY READY (Press CTRL+C to exit)\n")
-
-                await monitor_loop(page, announcer, state)
-            finally:
-                await browser.close()
-    finally:
-        await announcer.stop()
-
-
-# ============================================================
-# DEMO MODE  (python crex_radio_pro.py --demo)
-# ============================================================
-async def run_demo() -> None:
-    print("🎧 DEMO MODE - sample commentary, no browser needed\n")
-    announcer = RadioAnnouncer()
-    announcer.start()
-
-    samples = [
-        ("3.2", "1", "Muditha Disanayaka", "Aftab Alam Shah", None),
-        ("3.3", "4", "Muditha Disanayaka", "Aftab Alam Shah", None),
-        ("3.4", "6", "Muditha Disanayaka", "Aftab Alam Shah", None),
-        ("3.5", "W", "Muditha Disanayaka", "Aftab Alam Shah",
-         {"batter": "Aftab Alam Shah", "runs": "24", "balls": "11",
-          "howOut": "c Ethan DSouza b Muditha Disanayaka"}),
-        ("4.1", "Wd", "Vicky Ranjan", "Aryansh Sharma", None),
-        ("4.1", "W", "Vicky Ranjan", "Aryansh Sharma",
-         {"batter": "Aryansh Sharma", "runs": "0", "balls": "2", "howOut": "b Vicky Ranjan"}),
-        ("4.3", "W", "Vicky Ranjan", "Carl Rai",
-         {"batter": "Carl Rai", "runs": "7", "balls": "5", "howOut": "lbw b Vicky Ranjan"}),
-        ("4.5", "W", "Vicky Ranjan", "Asif Taniwal",
-         {"batter": "Asif Taniwal", "runs": "15", "balls": "9", "howOut": "run out"}),
-    ]
-    for ball, badge, bowler, batsman, dismissal in samples:
-        text, level = generate_circle_ball_commentary(ball, badge, bowler, batsman, dismissal)
-        print(f"[{badge}] level {level}: {text}\n")
-        await announcer.say(text, level)
-
-    stats = over_stats_from_tokens(["1", "4", "0", "W", "6", "1"])
-    summary = build_over_summary(6, 61, 3, stats, 10)
-    print("OVER:", summary, "\n")
-    await announcer.say(summary, 2)
-
-    await announcer.wait_idle()
-    await announcer.stop()
-
-
-def main() -> None:
-    logging.basicConfig(
-        level=logging.DEBUG if DEBUG else logging.INFO,
-        format="%(asctime)s | %(levelname)s | %(message)s",
-        datefmt="%H:%M:%S",
-    )
-    configure_stdio()
-    disable_quickedit()
-    prevent_sleep_and_throttle()
-
-    try:
-        if DEMO:
-            asyncio.run(run_demo())
-            return
-
-        print("\n" + "=" * 60)
-        print("🏏 PREET SPORTS - CREX RADIO RUNNER")
-        print("=" * 60)
-        cli_urls = [a for a in sys.argv[1:] if not a.startswith("--")]
-        if cli_urls:
-            final_url = cli_urls[0]
-        else:
-            user_url = input("Enter CREX Match URL (Press ENTER to use default):\n> ").strip()
-            final_url = user_url or DEFAULT_URL
-        asyncio.run(run_live_stream(final_url))
-    except KeyboardInterrupt:
-        print("\n\n🛑 Script stopped by user.")
-    except Exception:
-        traceback.print_exc()
-        input("\nPress ENTER to close...")
-
-
-if __name__ == "__main__":
-    main()
