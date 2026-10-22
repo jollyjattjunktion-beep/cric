@@ -1295,7 +1295,7 @@ def _web_circle_value(info):
     value = info.get("circle_val")
     if value is None or str(value).strip() == "":
         value = info.get("runs", "")
-    return str(value or "").strip().upper()
+    return "" if value is None else str(value).strip().upper()
 
 
 def _web_ball_names(info):
@@ -1394,7 +1394,10 @@ def build_live_over_summary(over_index, balls, score_state=None, lang="hinglish"
     for ball in balls or []:
         if not isinstance(ball, dict):
             continue
-        token = str(ball.get("circle_val") or ball.get("runs") or "").strip().upper()
+        raw_token = ball.get("circle_val")
+        if raw_token is None or str(raw_token).strip() == "":
+            raw_token = ball.get("runs")
+        token = "" if raw_token is None else str(raw_token).strip().upper()
         over = str(ball.get("over") or "").strip()
         key = (over, token, str(ball.get("matchup") or "").strip().lower())
         if key in seen:
