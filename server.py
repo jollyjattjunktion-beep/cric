@@ -220,6 +220,8 @@ def _normalize_rendered_circle(snapshot):
         "spoken_line": "",
         "rendered_circle": True,
         "browser_seq": str(snapshot.get("seq") or ""),
+        "is_over_complete": bool(snapshot.get("isOverComplete")),
+        "over_balls": list(snapshot.get("overBalls") or []),
     }
 
 
@@ -472,12 +474,30 @@ def _delivery_stats(token: Any) -> tuple[int, bool, int, int, int]:
     return (0, True, 0, 0, 0)
 
 
+def _legal_deliveries_in_over(over_index: int, balls: list[Dict[str, Any]]) -> int:
+    """Count legal deliveries from one over; wides and no-balls do not count."""
+    seen = set()
+    legal = 0
+    for ball in balls or []:
+        if not isinstance(ball, dict) or _ball_over_index(ball) != over_index:
+            continue
+        slot = _ball_slot_key(ball)
+        if slot in seen:
+            continue
+        seen.add(slot)
+        token = _normal_space(ball.get("circle_val") or ball.get("runs", ""))
+        if token and _delivery_stats(token)[1]:
+            legal += 1
+    return legal
+
+
 def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str, score_state: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """Use the uploaded Pro Commentary over recap once per completed over."""
+    """Return a recap only after six legal deliveries are available."""
     rows = [b for b in balls if _ball_over_index(b) == over_index]
-    if not rows:
+    if _legal_deliveries_in_over(over_index, rows) < 6:
         return None
-    return build_live_over_summary(over_index, rows, score_state=score_state, lang=lang)
+    summary = build_live_over_summary(over_index, rows, score_state=score_state, lang=lang)
+    return summary or None
 
 
 def _audio_duration_seconds(mp3_data: bytes) -> float:
