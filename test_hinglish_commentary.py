@@ -51,7 +51,7 @@ class HinglishCommentaryTests(unittest.TestCase):
         self.assertIn("स्कोर अब एक सौ चौरानवे रन, तीन विकेट", recap)
         self.assertIn("रन रेट", recap)
         self.assertIn("सात दशमलव", recap)
-        self.assertIn("Pavan Rathnayake चौहत्तर रन, सड़सठ गेंदें", recap)
+        self.assertIn("Pavan Rathnayake चौहत्तर रन, सरसठ गेंदें", recap)
         self.assertNotRegex(recap, r"(?<![A-Za-z])\d+(?:\.\d+)?")
         self.assertNotIn(" complete", recap)
         self.assertNotIn(" per over", recap)
