@@ -1,67 +1,73 @@
-import re
 import unittest
 
 from final import AUDIO_PROFILES, build_live_circle_announcement, build_live_over_summary
 
 
 class HinglishCommentaryTests(unittest.TestCase):
-    def test_hinglish_wicket_keeps_names_and_hindi_number_words(self):
+    def test_single_run_has_consistent_hindi_script(self):
         result = build_live_circle_announcement({
-            "over": "26.6", "circle_val": "W", "runs": "W",
-            "bowler": "Jamie Overton", "batsman": "Avishka Fernando",
-            "matchup": "Jamie Overton to Avishka Fernando",
-            "last_dismissal": {
-                "batter": "Avishka Fernando", "runs": "97", "balls": "82",
-                "howOut": "c Pavan Rathnayake b Jamie Overton"
-            },
-            "total_runs": 190, "total_wickets": 3,
-            "striker": "Pavan Rathnayake", "striker_runs": 72, "striker_balls": 64,
-            "non_striker": "Avishka Fernando", "non_striker_runs": 97, "non_striker_balls": 82,
+            "over": "35.3", "circle_val": "1", "runs": "1",
+            "bowler": "Liam Dawson", "batsman": "Dasun Shanaka",
+            "matchup": "Liam Dawson to Dasun Shanaka",
         }, lang="hinglish")
-        self.assertTrue(result["should_speak"])
-        self.assertIn("Avishka Fernando", result["spoken_text"])
-        self.assertIn("Jamie Overton", result["spoken_text"])
-        self.assertIn("सत्ताईसवें over ki आखिरी ball", result["spoken_text"])
-        self.assertNotRegex(result["spoken_text"], r"(?<![A-Za-z])\d+(?:\.\d+)?")
+        self.assertEqual(result["spoken_text"], "छत्तीसवें ओवर की तीसरी बॉल, एक रन लेकर स्ट्राइक बदल ली।")
 
-    def test_over_recap_uses_hindi_number_words_and_needs_six_legal_balls(self):
-        short = [
-            {"over": f"26.{i + 1}", "circle_val": token, "runs": token}
-            for i, token in enumerate(["1", "4", "0", "W", "6"])
-        ]
-        self.assertEqual(
-            build_live_over_summary(26, short, {"total_runs": 190, "total_wickets": 3}, lang="hinglish"),
-            ""
-        )
-        full = [
-            {"over": f"26.{i + 1}", "circle_val": token, "runs": token, "matchup": f"bat-{i}"}
-            for i, token in enumerate(["1", "4", "0", "W", "6", "1"])
-        ]
-        summary = build_live_over_summary(
-            26, full,
-            {
-                "total_runs": 194, "total_wickets": 3,
-                "striker": "Dasun Shanaka", "striker_runs": 1, "striker_balls": 2,
-                "non_striker": "Pavan Rathnayake", "non_striker_runs": 74, "non_striker_balls": 67,
-            },
-            lang="hinglish",
-        )
-        self.assertIn("सत्ताईस complete", summary)
-        self.assertIn("Dasun Shanaka", summary)
-        self.assertIn("सात दशमलव", summary)
-        self.assertNotRegex(summary, r"(?<![A-Za-z])\d+(?:\.\d+)?")
-
-
-    def test_hindi_voice_selection_still_uses_hinglish_words(self):
+    def test_wicket_preserves_player_names_and_hindi_numbers(self):
         result = build_live_circle_announcement({
-            "over": "0.1", "circle_val": "1", "runs": "1",
-            "bowler": "Bowler One", "batsman": "Batter One",
-            "matchup": "Bowler One to Batter One",
-        }, lang="hi")
-        self.assertTrue(result["spoken_text"].startswith("पहले over ki पहली ball"))
-        self.assertNotRegex(result["spoken_text"], r"(?<![A-Za-z])\\d+(?:\\.\\d+)?")
+            "over": "35.4", "circle_val": "W", "runs": "W",
+            "bowler": "Liam Dawson", "batsman": "Dasun Shanaka",
+            "matchup": "Liam Dawson to Dasun Shanaka",
+            "last_dismissal": {
+                "batter": "Dasun Shanaka", "runs": "40", "balls": "23",
+                "howOut": "c Pavan Rathnayake b Liam Dawson"
+            },
+            "total_runs": 262, "total_wickets": 4,
+            "striker": "Pavan Rathnayake", "striker_runs": 101, "striker_balls": 88,
+            "non_striker": "Dasun Shanaka", "non_striker_runs": 40, "non_striker_balls": 23,
+        }, lang="hinglish")
+        text = result["spoken_text"]
+        self.assertIn("छत्तीसवें ओवर की चौथी बॉल", text)
+        self.assertIn("Dasun Shanaka चालीस रन बनाकर", text)
+        self.assertIn("Liam Dawson", text)
+        self.assertIn("स्कोर अब दो सौ बासठ रन, चार विकेट के नुकसान पर", text)
+        self.assertIn("Pavan Rathnayake एक सौ एक रन, अठासी गेंदें", text)
+        self.assertNotRegex(text, r"(?<![A-Za-z])\d+(?:\.\d+)?")
+        self.assertNotIn("ki ", text)
+        self.assertNotIn(" off ", text)
 
-    def test_summary_uses_madhur_normal_rate_pitch(self):
+    def test_over_recap_has_consistent_hindi_script_and_requires_six_legal_balls(self):
+        five = [{"over": f"26.{i+1}", "circle_val": token, "runs": token}
+                for i, token in enumerate(["1", "4", "0", "W", "6"])]
+        score = {"total_runs": 194, "total_wickets": 3}
+        self.assertEqual(build_live_over_summary(26, five, score, lang="hinglish"), "")
+        six = [{"over": f"26.{i+1}", "circle_val": token, "runs": token, "matchup": f"batter{i}"}
+               for i, token in enumerate(["1", "4", "0", "W", "6", "1"])]
+        score.update({
+            "striker": "Dasun Shanaka", "striker_runs": 1, "striker_balls": 2,
+            "non_striker": "Pavan Rathnayake", "non_striker_runs": 74, "non_striker_balls": 67
+        })
+        recap = build_live_over_summary(26, six, score, lang="hinglish")
+        self.assertIn("सत्ताईसवें ओवर पूरा हुआ", recap)
+        self.assertIn("स्कोर अब एक सौ चौरानवे रन, तीन विकेट", recap)
+        self.assertIn("रन रेट", recap)
+        self.assertIn("सात दशमलव", recap)
+        self.assertIn("Pavan Rathnayake चौहत्तर रन, सड़सठ गेंदें", recap)
+        self.assertNotRegex(recap, r"(?<![A-Za-z])\d+(?:\.\d+)?")
+        self.assertNotIn(" complete", recap)
+        self.assertNotIn(" per over", recap)
+
+    def test_hi_and_hinglish_mode_use_same_madhur_style(self):
+        ball = {
+            "over": "35.3", "circle_val": "1", "runs": "1",
+            "bowler": "Liam Dawson", "batsman": "Dasun Shanaka",
+            "matchup": "Liam Dawson to Dasun Shanaka"
+        }
+        self.assertEqual(
+            build_live_circle_announcement(ball, lang="hi")["spoken_text"],
+            build_live_circle_announcement(ball, lang="hinglish")["spoken_text"]
+        )
+
+    def test_recap_uses_normal_madhur_profile(self):
         self.assertEqual(AUDIO_PROFILES[2], ("+5%", "+1Hz", "+5%"))
 
 
