@@ -21,7 +21,7 @@ class FinalPyAdapterTests(unittest.TestCase):
             for i, token in enumerate(["1", "4", "0", "W", "6", "1"])
         ]
         summary = build_live_over_summary(0, balls, {"total_runs": 61, "total_wickets": 3}, lang="hinglish")
-        self.assertIn("पहले ओवर पूरा हुआ", summary)
+        self.assertIn("पहला ओवर पूरा हुआ", summary)
         self.assertNotIn("Over 1 complete", summary)
 
     def test_madhur_profiles_are_moderate(self):

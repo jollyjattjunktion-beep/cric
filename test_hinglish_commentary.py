@@ -47,7 +47,7 @@ class HinglishCommentaryTests(unittest.TestCase):
             "non_striker": "Pavan Rathnayake", "non_striker_runs": 74, "non_striker_balls": 67
         })
         recap = build_live_over_summary(26, six, score, lang="hinglish")
-        self.assertIn("सत्ताईसवें ओवर पूरा हुआ", recap)
+        self.assertIn("सत्ताईसवाँ ओवर पूरा हुआ", recap)
         self.assertIn("स्कोर अब एक सौ चौरानवे रन, तीन विकेट", recap)
         self.assertIn("रन रेट", recap)
         self.assertIn("सात दशमलव", recap)
