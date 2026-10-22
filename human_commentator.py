@@ -1350,6 +1350,13 @@ def build_live_circle_announcement(ball_info, lang="hi"):
     )
     delivery = classify_delivery(token)
     kind = delivery["kind"]
+    circle_runs = int(delivery.get("runs", 0) or 0) if kind == "runs" else 0
+    if kind == "runs" and circle_runs == 4:
+        event_kind = "four"
+    elif kind == "runs" and circle_runs == 6:
+        event_kind = "six"
+    else:
+        event_kind = kind
 
     # Team score is deliberately announced only on a wicket. Routine balls stay short.
     if kind == "wicket":
@@ -1366,6 +1373,8 @@ def build_live_circle_announcement(ball_info, lang="hi"):
     badges = {
         "dot": "DOT BALL",
         "runs": "RUNS",
+        "four": "FOUR",
+        "six": "SIX",
         "wide": "WIDE",
         "noball": "NO BALL",
         "legbye": "LEG BYE",
@@ -1377,8 +1386,8 @@ def build_live_circle_announcement(ball_info, lang="hi"):
         "spoken_text": spoken_text,
         "source_text": "",
         "should_speak": True,
-        "event": kind,
-        "badge": badges.get(kind, "BALL"),
+        "event": event_kind,
+        "badge": badges.get(event_kind, badges.get(kind, "BALL")),
         "level": level,
         "rate": rate,
         "pitch": pitch,
