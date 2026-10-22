@@ -1345,6 +1345,18 @@ def _hinglish_ball_phrase(ball_str):
     }
     return f"{over_ordinal_hindi(over_num)} ओवर की {ball_words.get(ball_idx, 'अगली बॉल')}"
 
+def _over_nominative_hindi(over_num):
+    """Grammatical subject form for recap openings, e.g. 'सत्ताईसवाँ ओवर पूरा हुआ'."""
+    direct = {
+        1: "पहला", 2: "दूसरा", 3: "तीसरा", 4: "चौथा", 5: "पाँचवाँ",
+        6: "छठा", 7: "सातवाँ", 8: "आठवाँ", 9: "नौवाँ", 10: "दसवाँ",
+        11: "ग्यारहवाँ", 12: "बारहवाँ", 13: "तेरहवाँ", 14: "चौदहवाँ",
+        15: "पंद्रहवाँ", 16: "सोलहवाँ", 17: "सत्रहवाँ", 18: "अठारहवाँ",
+        19: "उन्नीसवाँ", 20: "बीसवाँ",
+    }
+    return direct.get(int(over_num), f"{number_to_hindi_words(int(over_num))}वाँ")
+
+
 def _hinglish_dismissal_line(how_out, bowler):
     """Return natural Hindi-script Hinglish; keep international player names in Latin."""
     details = re.sub(r"\s+", " ", str(how_out or "").strip())
@@ -1554,7 +1566,7 @@ def build_live_over_summary(over_index, balls, score_state=None, lang="hinglish"
     over_wickets = int(stats.get("wickets", 0) or 0)
     fours = int(stats.get("fours", 0) or 0)
     sixes = int(stats.get("sixes", 0) or 0)
-    ordinal = over_ordinal_hindi(spoken_over)
+    ordinal = _over_nominative_hindi(spoken_over)
 
     if over_runs == 0 and over_wickets == 0:
         parts = [f"{ordinal} ओवर पूरा हुआ! इस ओवर में कोई रन नहीं आया। शानदार गेंदबाज़ी!"]
