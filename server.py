@@ -71,7 +71,7 @@ CREX_CIRCLE_EXTRACT_JS = r'''() => {
     );
     for (const row of overRows) {
         const rowText = row.innerText || '';
-        const m = rowText.match(/\\bOver\\s+(\\d+)\\b/i);
+        const m = rowText.match(/\bOver\s+(\d+)\b/i);
         if (!m) continue;
         const parsedOver = parseInt(m[1], 10);
         const rowBalls = [];
