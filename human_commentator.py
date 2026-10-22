@@ -179,16 +179,32 @@ class HumanCommentator:
 
         if event == "six":
             if hindi:
-                return f"छक्का! {batter} ने गेंद सीधे स्टैंड्स के पार भेज दी!"
+                return random.choice((
+                    "उठाकर मारा! गेंद आसमान में, और ये गई स्टैंड्स में—छह रन!",
+                    f"क्या पावर हिटिंग! {batter} ने गेंद बाउंड्री के पार भेज दी—छक्का!",
+                    "बल्ले के बिल्कुल बीचों-बीच लगी, फील्डर देखते रह गए—छह रन!",
+                ))
             if hinglish:
-                return f"SIX! {batter} ने ball stands के पार भेज दी—क्या hit है!"
+                return random.choice((
+                    f"SIX! {batter} ने ball stands के पार भेज दी—क्या hit है!",
+                    f"Power hitting! {batter} ने गेंद सीधे rope के पार भेजी—six runs!",
+                ))
             return f"SIX! {batter} launches it over the rope!"
+
         if event == "four":
             if hindi:
-                return f"चौका! {batter} की शानदार टाइमिंग, गेंद बाउंड्री के पार!"
+                return random.choice((
+                    "कलाइयों का जादू! खूबसूरत प्लेसमेंट, गेंद रस्सी के पार—चार रन!",
+                    "गज़ब की टाइमिंग! फील्डर को हिलने का मौका नहीं, चौका!",
+                    "गैप मिला और गेंद सीधी बाउंड्री के पार—शानदार चौका!",
+                ))
             if hinglish:
-                return f"FOUR! Kya timing—{batter} ने ball boundary के पार भेजी!"
+                return random.choice((
+                    f"FOUR! Kya timing—{batter} ने ball boundary के पार भेजी!",
+                    "कलाइयों का जादू! Perfect placement—चार रन!",
+                ))
             return f"FOUR! Beautiful timing from {batter}!"
+
         if event == "wide":
             if hindi:
                 return "वाइड! गेंद लाइन से बाहर, बल्लेबाज़ी टीम को अतिरिक्त रन।"
@@ -222,28 +238,39 @@ class HumanCommentator:
         if event == "runs":
             if n == 1:
                 if hindi:
-                    return "एक रन, स्ट्राइक बदल गई।"
+                    return random.choice((
+                        "हल्के हाथों से कवर्स की ओर खेला और तेज़ी से एक सिंगल पूरा किया।",
+                        "कलाइयों को मोड़कर स्ट्राइक रोटेट की, आसानी से एक रन चुरा लिया।",
+                        "गेंद को गैप में धकेला और एक रन लेकर स्ट्राइक बदल ली।",
+                    ))
                 if hinglish:
-                    return "Single लिया, strike rotate हो गई!"
+                    return random.choice((
+                        "Soft hands, quick running—एक single पूरा किया!",
+                        "Gap में push किया और strike rotate कर ली—one run!",
+                    ))
                 return "Quick single, strike rotates."
             if n == 2:
                 if hindi:
-                    return "दो रन, बढ़िया रनिंग!"
+                    return random.choice((
+                        "गैप में खेलकर दो फील्डर्स के बीच से बढ़िया रनिंग, दो रन पूरे!",
+                        "सॉफ्ट हैंड्स से धकेला, बढ़िया तालमेल और दौड़कर दो रन निकाले!",
+                    ))
                 if hinglish:
-                    return "Two runs—good running between the wickets!"
+                    return "Gap में shot, sharp running—दो runs पूरे!"
                 return "Two runs, good running."
             if n == 3:
                 if hindi:
-                    return "तीन रन, शानदार रनिंग बिटवीन द विकेट्स!"
+                    return "शानदार रनिंग बिटवीन द विकेट्स—तीन रन पूरे!"
                 if hinglish:
-                    return "Three runs—excellent running!"
+                    return "Excellent running between the wickets—three runs!"
                 return "Three runs, excellent running."
             if n == 5:
                 if hindi:
-                    return "पाँच रन! शानदार दौड़ और फील्डिंग पर दबाव!"
+                    return "पाँच रन! ओवरथ्रो या शानदार दौड़, बल्लेबाज़ों ने पाँच रन बटोर लिए!"
                 if hinglish:
-                    return "Five runs! Smart running, score तेज़ी से आगे!"
+                    return "Five runs! Smart running या overthrow—score तेज़ी से आगे!"
                 return "Five runs! Smart running."
+
         if hindi:
             return f"{batter} ने गेंद खेली।"
         if hinglish:
