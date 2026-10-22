@@ -13,3 +13,17 @@ services:
         value: 1
       - key: SARVAM_API_KEY
         sync: false
+
+  - type: web
+    name: preet-sports-radio-web
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    dockerCommand: python radio_web_app.py
+    healthCheckPath: /api/status
+    envVars:
+      - key: PORT
+        value: 10000
+      - key: PYTHONUNBUFFERED
+        value: 1
