@@ -1327,6 +1327,23 @@ class BroadcastHub:
                         ):
                             latest_ball = rendered_ball
 
+                        # The page tells us exactly when six legal deliveries are complete.
+                        # Register the recap at ball six rather than waiting for ball two next over.
+                        if (rendered_baseline_was_done and rendered_fresh and rendered_ball
+                                and rendered_ball.get("is_over_complete")):
+                            completion_key = f"{rendered_ball.get('over', '')}|{rendered_ball.get('browser_seq', '')}|{rendered_ball.get('circle_val', '')}"
+                            if completion_key not in seen_rendered_completion_keys:
+                                seen_rendered_completion_keys.add(completion_key)
+                                register_completed_over(
+                                    _ball_over_index(rendered_ball),
+                                    raw_balls,
+                                    fresh_data,
+                                    position="after_ball",
+                                    rendered_tokens=rendered_ball.get("over_balls") or [],
+                                    completion_key=completion_key,
+                                )
+
+
                         # Baseline on the first real rendered circle instead of announcing the
                         # current ball just because the browser watcher caught up after startup.
                         if rendered_fresh and not rendered_circle_state.get("baseline_done"):
