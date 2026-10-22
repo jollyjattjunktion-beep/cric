@@ -28,7 +28,7 @@ except ImportError:  # REST/HTML feed remains a fallback if Chromium is unavaila
 
 # Import existing core modules
 from cricket_streamer import CrexParser, create_tts, get_live_matches, resolve_match_url
-from human_commentator import commentator
+from human_commentator import build_live_circle_announcement, commentator
 
 logging.basicConfig(
     level=logging.INFO,
@@ -211,6 +211,9 @@ def _normalize_rendered_circle(snapshot):
         "circle_val": token,
         "runs": token,
         "matchup": matchup,
+        "bowler": bowler,
+        "batter": batter,
+        "last_dismissal": snapshot.get("lastDismissal") or snapshot.get("last_dismissal") or {},
         "commentary": "",
         "spoken_line": "",
         "rendered_circle": True,
@@ -1044,8 +1047,11 @@ class BroadcastHub:
                     audio_url = "data:audio/mpeg;base64," + base64.b64encode(mp3_data).decode("ascii")
                     self.latest_commentary = radio_text
                     await self.broadcast_ws("commentary", {
+                        "event_id": current_event.get("event_id") or f"{ball_over}|{circle_token}",
                         "text": radio_text,
                         "badge": badge,
+                        "over": ball_over,
+                        "circle_value": circle_token,
                         "audio_url": audio_url,
                         "duration": round(duration, 1),
                         "kind": "ball",
@@ -1393,14 +1399,13 @@ class BroadcastHub:
                                         "runs": circle_token,
                                         "over": _normal_space(latest_ball.get("over")),
                                     }
-                                    radio_meta = commentator.humanize(
-                                        "",
-                                        ball_info=live_info,
-                                        lang=lang,
-                                    ) or {}
+                                    # Generate the manual ball call with the same pro scripts
+                                    # used by final.py; the CREX paragraph is never a speech fallback.
+                                    radio_meta = build_live_circle_announcement(live_info, lang=lang) or {}
                                     radio_preview = _normal_space(
                                         radio_meta.get("spoken_text") or f"Live ball {live_info['over']}."
                                     )
+                                    event_id = f"{live_info['over']}|{circle_token}"
                                     radio_badge = radio_meta.get("badge") or _source_badge(latest_ball)
                                     radio_rate = radio_meta.get("rate") or "+15%"
                                     radio_pitch = radio_meta.get("pitch") or "+10Hz"
@@ -1424,14 +1429,17 @@ class BroadcastHub:
                                         "active_non_striker_balls": fresh_data.get("non_striker_balls"),
                                     }
                                     await self.broadcast_ws("commentary_preview", {
+                                        "event_id": event_id,
                                         "text": radio_preview,
                                         "badge": radio_badge,
                                         "over": live_info["over"],
                                         "circle_value": circle_token,
                                         "status": "preparing_audio",
+                                        "voice_fallback_after_ms": 900,
                                     })
                                     await queue_latest({
                                         "version": latest_event_version,
+                                        "event_id": event_id,
                                         "ball": latest_ball,
                                         "fresh_data": fresh_data,
                                         "radio_text": radio_preview,
@@ -1541,7 +1549,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "radio-hinglish-fast-20261022-3",
+        "server_build": "radio-final-fast-fallback-20261022-1",
     })
 
 async def handle_api_live_matches(request: web.Request) -> web.Response:
