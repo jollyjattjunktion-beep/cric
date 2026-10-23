@@ -30,7 +30,38 @@ except ImportError:  # REST/HTML feed remains a fallback if Chromium is unavaila
 # Import existing core modules
 from cricket_streamer import CrexParser, create_tts, get_live_matches, resolve_match_url
 from human_commentator import commentator
-from final import build_live_circle_announcement, build_live_over_summary, prepare_tts_pronunciation_text
+from final import build_live_circle_announcement, build_over_summary
+
+# Compatibility adapters: keep this web server working with the current final.py API.
+def prepare_tts_pronunciation_text(text, ball_info=None):
+    """Return readable TTS text; final.py currently exposes no pronunciation helper."""
+    return " ".join(str(text or "").split())
+
+def build_live_over_summary(over_index, rows, score_state=None, lang="hi"):
+    """Adapt server's row-based recap call to final.py's existing summary function."""
+    score_state = score_state or {}
+    try:
+        runs = score_state.get("total_runs", score_state.get("runs", 0))
+        wickets = score_state.get("total_wickets", score_state.get("wickets", 0))
+        stats = {"legal": 0, "runs": 0, "wickets": 0, "fours": 0, "sixes": 0}
+        for row in rows or []:
+            token = str(row.get("circle_val") or row.get("runs") or "").strip().upper()
+            if token in {"W", "WKT", "OUT"}:
+                stats["wickets"] += 1
+            elif token in {"WD", "WIDE", "NB", "NO BALL"}:
+                stats["runs"] += 1
+            elif token.isdigit():
+                n = int(token)
+                stats["runs"] += n
+                stats["legal"] += 1
+                stats["fours"] += int(n == 4)
+                stats["sixes"] += int(n == 6)
+            else:
+                stats["legal"] += int(token in {"", "•", "DOT"})
+        return build_over_summary(int(over_index) + 1, runs, wickets, stats=stats)
+    except Exception:
+        logger.exception("Over summary compatibility adapter failed")
+        return f"Over {int(over_index) + 1} complete."
 
 logging.basicConfig(
     level=logging.INFO,
