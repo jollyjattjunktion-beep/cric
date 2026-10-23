@@ -514,6 +514,14 @@
     else handleCommentaryPreview(pending.data);
   }
 
+  function circleOnlyText(data) {
+    // Keep the studio display focused on the actual CREX circle, not a long text transcript.
+    const over = String((data && data.over) || "").trim();
+    const token = String((data && (data.circle_value ?? data.runs)) || "").trim().toUpperCase();
+    if (!token) return over ? ("BALL " + over) : "WAITING FOR CIRCLE";
+    return (over ? ("BALL " + over + "  •  ") : "") + "CIRCLE: " + token;
+  }
+
   function handleCommentaryPreview(data) {
     if (!data) return;
     const key = commentaryEventId(data);
@@ -531,7 +539,7 @@
     if (instantFallbackTimer) { clearTimeout(instantFallbackTimer); instantFallbackTimer = null; }
     if (commentaryTimeout) { clearTimeout(commentaryTimeout); commentaryTimeout = null; }
     currentPreviewEventId = key;
-    speakingText.textContent = '"' + (data.text || "New delivery detected.") + '"';
+    speakingText.textContent = '"' + circleOnlyText(data) + '"';
     onAirBadge.className = "on-air-badge waiting";
     onAirText.textContent = (data.badge || "NEW BALL") + " • PREPARING AUDIO";
     waveform.className = "waveform";
@@ -563,7 +571,7 @@
     if (commentaryTimeout) { clearTimeout(commentaryTimeout); commentaryTimeout = null; }
     currentPreviewEventId = key;
     rememberEvent(spokenEventIds, key);
-    speakingText.textContent = '"' + (data.text || "") + '"';
+    speakingText.textContent = '"' + (overSummary ? (data.text || "") : circleOnlyText(data)) + '"';
     setTalkingState(true, data.badge);
     if (data.audio_url && !isAudioMuted && audioPlayer) {
       cancelBrowserSpeech();
