@@ -1032,3 +1032,122 @@ def build_live_circle_announcement(
         "should_speak": bool(token),
     }
 
+
+
+def _over_nominative_hindi(over_number: int) -> str:
+    """Grammatical subject form: 'सत्ताईसवाँ ओवर पूरा हुआ'."""
+    direct = {
+        1: "पहला", 2: "दूसरा", 3: "तीसरा", 4: "चौथा", 5: "पाँचवाँ",
+        6: "छठा", 7: "सातवाँ", 8: "आठवाँ", 9: "नौवाँ", 10: "दसवाँ",
+        11: "ग्यारहवाँ", 12: "बारहवाँ", 13: "तेरहवाँ", 14: "चौदहवाँ",
+        15: "पंद्रहवाँ", 16: "सोलहवाँ", 17: "सत्रहवाँ", 18: "अठारहवाँ",
+        19: "उन्नीसवाँ", 20: "बीसवाँ",
+    }
+    n = int(over_number)
+    return direct.get(n, f"{number_to_hindi_words(n)}वाँ")
+
+
+def _decimal_hindi_words(value: float) -> str:
+    rendered = f"{value:.2f}"
+    whole, fractional = rendered.split(".")
+    return (
+        f"{number_to_hindi_words(int(whole))} दशमलव "
+        + " ".join(number_to_hindi_words(int(digit)) for digit in fractional)
+    )
+
+
+def build_live_over_summary(over_index, balls, score_state=None, lang="hinglish"):
+    """Hindi-script Hinglish over recap; return nothing before six legal deliveries."""
+    score_state = score_state or {}
+    unique_tokens = []
+    seen = set()
+    for ball in balls or []:
+        if not isinstance(ball, dict):
+            continue
+        raw = ball.get("circle_val")
+        if raw is None or str(raw).strip() == "":
+            raw = ball.get("runs", "")
+        token = _compact(str(raw or ""))
+        over = _space(ball.get("over"))
+        seq = _space(ball.get("browser_seq") or ball.get("seq"))
+        matchup = _space(ball.get("matchup")).lower()
+        key = (over, token, matchup, seq) if (seq or matchup) else (over, token)
+        if key in seen:
+            continue
+        seen.add(key)
+        unique_tokens.append(token)
+
+    stats = over_stats_from_tokens(unique_tokens)
+    if int(stats.get("legal", 0)) < 6:
+        return ""
+
+    try:
+        spoken_over = int(over_index) + 1
+    except (TypeError, ValueError):
+        spoken_over = 1
+
+    over_runs = int(stats.get("runs", 0) or 0)
+    over_wickets = int(stats.get("wickets", 0) or 0)
+    fours = int(stats.get("fours", 0) or 0)
+    sixes = int(stats.get("sixes", 0) or 0)
+    ordinal = _over_nominative_hindi(spoken_over)
+
+    if over_runs == 0 and over_wickets == 0:
+        parts = [f"{ordinal} ओवर पूरा हुआ! इस ओवर में कोई रन नहीं आया। शानदार गेंदबाज़ी!"]
+    elif over_runs == 0:
+        parts = [
+            f"{ordinal} ओवर पूरा हुआ! विकेट मेडन ओवर—कोई रन नहीं आया और "
+            f"{number_to_hindi_words(over_wickets)} विकेट गिरा। शानदार गेंदबाज़ी!"
+        ]
+    else:
+        line = f"{ordinal} ओवर पूरा हुआ! इस ओवर में {number_to_hindi_words(over_runs)} रन आए"
+        details = []
+        if fours:
+            details.append(f"{number_to_hindi_words(fours)} " + ("चौका" if fours == 1 else "चौके"))
+        if sixes:
+            details.append(f"{number_to_hindi_words(sixes)} " + ("छक्का" if sixes == 1 else "छक्के"))
+        if over_wickets:
+            details.append(f"{number_to_hindi_words(over_wickets)} विकेट")
+        if details:
+            line += ", " + ", ".join(details)
+        parts = [line + "।"]
+
+    try:
+        score_runs = int(score_state.get("total_runs"))
+        score_wickets = int(score_state.get("total_wickets"))
+    except (TypeError, ValueError):
+        score_runs = score_wickets = None
+
+    if score_runs is not None and score_wickets is not None:
+        parts.append(
+            f"स्कोर अब {number_to_hindi_words(score_runs)} रन, "
+            f"{number_to_hindi_words(score_wickets)} विकेट के नुकसान पर।"
+        )
+        crr = score_runs / max(spoken_over, 1)
+        high, mid = _rr_thresholds(_safe_int(score_state.get("match_overs"), 20))
+        rate_words = _decimal_hindi_words(crr)
+        if crr >= high:
+            parts.append(f"रन रेट {rate_words} प्रति ओवर है, रन बनाने की रफ्तार शानदार है।")
+        elif crr >= mid:
+            parts.append(f"रन रेट {rate_words} प्रति ओवर है, रन बनने की रफ्तार ठीक चल रही है।")
+        else:
+            parts.append(f"रन रेट {rate_words} प्रति ओवर है, अब रन बनाने की रफ्तार बढ़ानी होगी।")
+
+    batters = []
+    for prefix in ("striker", "non_striker"):
+        name = _space(score_state.get(prefix))
+        try:
+            runs = int(score_state.get(f"{prefix}_runs"))
+            faced = int(score_state.get(f"{prefix}_balls"))
+        except (TypeError, ValueError):
+            continue
+        if name and not name.lower().startswith("batter "):
+            batters.append(
+                f"{name} {number_to_hindi_words(runs)} रन, "
+                f"{number_to_hindi_words(faced)} गेंदें"
+            )
+    if batters:
+        parts.append("बल्लेबाज़: " + "; ".join(batters) + "।")
+
+    return " ".join(parts)
+
