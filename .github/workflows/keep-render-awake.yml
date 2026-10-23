@@ -1,0 +1,35 @@
+name: Keep Render Cricket Broadcaster Awake
+
+on:
+  schedule:
+    # External inbound traffic prevents the Render Free web service from idling.
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ping-render:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Send external health request to Render
+        env:
+          RENDER_BASE_URL: https://cric-he5z.onrender.com
+        run: |
+          set -eu
+          for attempt in 1 2 3; do
+            code="$(curl --silent --show-error --location --max-time 25 \
+              --output /tmp/render-health.json --write-out "%{http_code}" \
+              "$RENDER_BASE_URL/api/health" || true)"
+            if [ "$code" = "200" ]; then
+              echo "Render health endpoint responded HTTP 200."
+              cat /tmp/render-health.json || true
+              exit 0
+            fi
+            echo "Attempt $attempt returned HTTP ${code:-no-response}; retrying."
+            sleep 10
+          done
+          echo "Render health endpoint did not return HTTP 200."
+          exit 1
