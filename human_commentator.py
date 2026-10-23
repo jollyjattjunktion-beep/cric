@@ -52,12 +52,12 @@ DEFAULT_URL = (
     "https://crex.com/cricket-live-score/"
     "abd-vs-emb-2nd-semi-final-emirates-d10-league-2026-match-updates-14NA"
 )
-POLL_SECONDS = 0.35
-OVER_SETTLE_SECONDS = 0.6
-WICKET_CARD_WAIT_SECONDS = 0.45
+POLL_SECONDS = 2.0
+OVER_SETTLE_SECONDS = 2.5
+WICKET_CARD_WAIT_SECONDS = 1.2
 PAGE_LOAD_TIMEOUT_MS = 45_000
 RELOAD_AFTER_FAILURES = 5
-TTS_TIMEOUT_SECONDS = 8
+TTS_TIMEOUT_SECONDS = 25
 VOICE_NAME = "hi-IN-MadhurNeural"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -76,7 +76,7 @@ BLOCKED_URL_PATTERNS = (
     "adsystem", "adnxs", "amazon-adsystem",
 )
 
-# Voice delivery per excitement level: (rate, pitch, volume)
+# Voice delivery per excitement l0evel: (rate, pitch, volume)
 AUDIO_PROFILES = {
     1: ("+15%", "+10Hz", "+0%"),    # Level 1 (Dot balls): Normal speaking volume
     2: ("+20%", "+12Hz", "+15%"),   # Level 2 (Singles/Extras): Slightly louder
@@ -208,6 +208,7 @@ def format_over_phrase_hindi(ball_str: str) -> str:
         return "इस ओवर में"
 
 
+
 # ============================================================
 # MASTER PHONETIC DICTIONARY
 # ============================================================
@@ -249,6 +250,7 @@ _NAME_NOISE = re.compile(
 )
 
 
+
 def clean_player_name_to_hindi(raw_name: Optional[str]) -> str:
     if not raw_name:
         return ""
@@ -277,7 +279,6 @@ def clean_player_name_to_hindi(raw_name: Optional[str]) -> str:
                 idx += 1
         result.append(word_hi if word_hi else word)
     return " ".join(result)
-
 
 # ============================================================
 # DELIVERY BADGE PARSER
@@ -511,7 +512,6 @@ def score_after_wicket_phrase(runs: int, wkts: int) -> str:
         phrase += " और ये आखिरी विकेट! पूरी टीम ऑल आउट!"
     return phrase
 
-
 # ------------------------------------------------------------
 # Ball-by-ball
 # ------------------------------------------------------------
@@ -605,32 +605,29 @@ def build_over_summary(
     stats: Optional[dict] = None,
     match_overs: Optional[int] = None,
 ) -> str:
-    """Short Hinglish over recap with a naturally spoken current score."""
+    over_word = over_ordinal_hindi(over_int)
     parts: list[str] = []
 
     if stats and stats.get("legal", 0) >= 6:
-        over_runs = int(stats.get("runs", 0))
-        over_wickets = int(stats.get("wickets", 0))
-        fours = int(stats.get("fours", 0))
-        sixes = int(stats.get("sixes", 0))
-        if over_runs == 0 and over_wickets == 0:
-            parts.append(f"Over {over_int} complete—maiden over! Is over mein koi run nahi. Great bowling!")
-        elif over_runs == 0:
-            parts.append(f"Over {over_int} complete—wicket maiden! Koi run nahi, {over_wickets} wicket. Superb bowling!")
+        if stats["runs"] == 0 and stats["wickets"] == 0:
+            parts.append(f"ओवर समाप्त! {over_word} ओवर मेडन! एक भी रन नहीं आया, कमाल की गेंदबाज़ी!")
+        elif stats["runs"] == 0:
+            wk = _count_phrase(stats["wickets"], "एक विकेट", "विकेट")
+            parts.append(f"ओवर समाप्त! विकेट मेडन! {over_word} ओवर में एक भी रन नहीं और {wk}! शानदार ओवर!")
         else:
-            details = []
-            if fours:
-                details.append(f"{fours} fours")
-            if sixes:
-                details.append(f"{sixes} sixes")
-            if over_wickets:
-                details.append(f"{over_wickets} wickets")
-            line = f"Over {over_int} complete! Is over mein {over_runs} runs aaye"
-            if details:
-                line += ", " + ", ".join(details)
-            parts.append(line + ".")
+            detail = []
+            if stats["sixes"]:
+                detail.append(_count_phrase(stats["sixes"], "एक छक्का", "छक्के"))
+            if stats["fours"]:
+                detail.append(_count_phrase(stats["fours"], "एक चौका", "चौके"))
+            if stats["wickets"]:
+                detail.append(_count_phrase(stats["wickets"], "एक विकेट", "विकेट"))
+            line = f"ओवर समाप्त! {over_word} ओवर में आए {number_to_hindi_words(stats['runs'])} रन"
+            if detail:
+                line += ", जिसमें " + _join_hindi(detail)
+            parts.append(line + "।")
     else:
-        parts.append(f"Over {over_int} complete.")
+        parts.append(f"ओवर समाप्त! {over_word} ओवर का खेल पूरा हुआ।")
 
     try:
         runs_num = int(str(runs).strip())
@@ -638,20 +635,27 @@ def build_over_summary(
     except (TypeError, ValueError):
         return " ".join(parts)
 
-    parts.append(f"Score {runs_num} for {wkts_num}.")
+    runs_hi = number_to_hindi_words(runs_num)
+    if wkts_num == 0:
+        parts.append(f"स्कोर {runs_hi} रन, बिना किसी विकेट के नुकसान के।")
+    else:
+        parts.append(f"स्कोर {runs_hi} रन, {number_to_hindi_words(wkts_num)} विकेट के नुकसान पर।")
+
     crr = round(runs_num / max(over_int, 1), 2)
+    crr_hi = number_to_hindi_words(int(crr))
     high, mid = _rr_thresholds(match_overs)
     if crr >= high:
-        parts.append(f"Run rate {crr:.2f} per over hai—batting side achchi position mein hai.")
+        parts.append(f"करंट रन रेट {crr_hi} के पार पहुंच चुका है, बल्लेबाज़ पूरी तरह हावी हैं।")
     elif crr >= mid:
-        parts.append(f"Run rate {crr:.2f} per over hai, scoring steady chal rahi hai.")
+        parts.append(f"रन गति लगभग {crr_hi} प्रति ओवर की है, दोनों टीमें अपनी रणनीति पर कायम हैं।")
     else:
-        parts.append(f"Run rate {crr:.2f} per over hai—ab runs accelerate karne honge.")
+        parts.append(f"रन गति {crr_hi} के आसपास थोड़ी धीमी है, अब बड़े शॉट्स की तलाश होगी।")
 
     if match_overs and over_int < match_overs:
-        parts.append(f"{match_overs - over_int} overs abhi baaki hain.")
+        parts.append(f"पारी में अभी {number_to_hindi_words(match_overs - over_int)} ओवर बाकी हैं।")
 
     return " ".join(parts)
+
 
 def build_innings_end(runs, wkts) -> str:
     try:
