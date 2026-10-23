@@ -104,6 +104,15 @@ class HinglishCommentaryTests(unittest.TestCase):
         self.assertIn("लियाम डॉसन", result["tts_text"])
         self.assertIn("पवन रथनायके", result["tts_text"])
 
+    def test_server_pronunciation_helper_uses_master_dictionary(self):
+        from server import prepare_tts_pronunciation_text as server_pronunciation
+        spoken = server_pronunciation(
+            "Dasun Shanaka and Liam Dawson",
+            {"batsman": "Dasun Shanaka", "bowler": "Liam Dawson"},
+        )
+        self.assertIn("दासुन शनाका", spoken)
+        self.assertIn("लियाम डॉसन", spoken)
+
     def test_recap_uses_normal_madhur_profile(self):
         self.assertEqual(AUDIO_PROFILES[2], ("+5%", "+1Hz", "+5%"))
 

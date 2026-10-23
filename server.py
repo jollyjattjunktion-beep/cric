@@ -30,6 +30,7 @@ except ImportError:  # REST/HTML feed remains a fallback if Chromium is unavaila
 # Import existing core modules
 from cricket_streamer import CrexParser, create_tts, get_live_matches, resolve_match_url
 from human_commentator import commentator, number_to_hindi_words, over_ordinal_hindi
+from final import build_live_circle_announcement, build_live_over_summary, prepare_tts_pronunciation_text
 
 logging.basicConfig(
     level=logging.INFO,
@@ -39,10 +40,11 @@ logging.basicConfig(
 logger = logging.getLogger("WebServer")
 
 def prepare_tts_pronunciation_text(text, ball_info=None):
-    """Low-overhead TTS text cleanup used by the existing voice pipeline."""
+    """Apply master pronunciation only to the TTS path; keep UI text unchanged."""
+    from final import prepare_tts_pronunciation_text as master_pronunciation
     value = re.sub(r"<[^>]+>", " ", str(text or ""))
-    return " ".join(value.replace("\\n", " ").split())
-
+    value = " ".join(value.replace("\\n", " ").split())
+    return master_pronunciation(value, ball_info)
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR  # Flat project: index.html, app.js and style.css sit beside server.py.
@@ -1572,7 +1574,7 @@ class BroadcastHub:
                                     }
                                     # Use the CREX circle result directly for a short, fast voice call.
                                     radio_preview = _fast_circle_announcement(circle_token, lang)
-                                    radio_tts_preview = radio_preview
+                                    radio_tts_preview = prepare_tts_pronunciation_text(radio_preview, live_info)
                                     event_id = latest_key
                                     radio_badge = _fast_circle_badge(circle_token)
                                     if radio_badge in {"SIX", "WICKET"}:

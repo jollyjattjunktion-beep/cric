@@ -158,22 +158,45 @@ def format_over_phrase_hindi(ball_str: str) -> str:
 # ============================================================
 # MASTER PHONETIC DICTIONARY
 # ============================================================
+# ============================================================
+# MASTER PHONETIC DICTIONARY & NAME PRONUNCIATION
+# ============================================================
 COMMON_NAMES = {
-    "muditha": "मुदिथा", "disanayaka": "डिसानायका",
-    "aftab": "आफताब", "alam": "आलम", "shah": "शाह",
-    "aryansh": "आर्यांश", "sharma": "शर्मा",
-    "y": "वाई", "rai": "राय",
-    "ethan": "ईथन", "carl": "कार्ल", "dsouza": "डिसूज़ा",
+    "muditha": "मुदिथा", "disanayaka": "डिसानायका", "aftab": "आफताब",
+    "alam": "आलम", "shah": "शाह", "aryansh": "आर्यांश", "sharma": "शर्मा",
+    "y": "वाई", "rai": "राय", "ethan": "ईथन", "carl": "कार्ल", "dsouza": "डिसूज़ा",
     "vicky": "विक्की", "ranjan": "रंजन", "wahab": "वहाब", "hassan": "हसन",
     "zadran": "जादरान", "panoly": "पनोली", "sabnani": "सबनानी", "parashar": "पाराशर",
     "asif": "आसिफ", "taniwal": "तानीवाल", "noorullah": "नूरुल्लाह", "ayobi": "अय्यूबी",
-    # common surnames / first names
     "singh": "सिंह", "khan": "खान", "kumar": "कुमार", "ali": "अली",
     "ahmed": "अहमद", "ahmad": "अहमद", "mohammad": "मोहम्मद", "mohammed": "मोहम्मद",
     "muhammad": "मुहम्मद", "patel": "पटेल", "malik": "मलिक", "iqbal": "इकबाल",
-    "rahman": "रहमान", "raza": "रज़ा",
+    "rahman": "रहमान", "raza": "रज़ा", "dasun": "दासुन", "shanaka": "शनाका",
+    "pavan": "पवन", "rathnayake": "रथनायके", "liam": "लियाम", "dawson": "डॉसन",
+    "avishka": "अविश्का", "fernando": "फर्नांडो", "jamie": "जेमी", "overton": "ओवरटन",
+    "wiaan": "वियान", "mulder": "मुल्डर", "beau": "बो", "webster": "वेब्स्टर",
+    "pathum": "पथुम", "nissanka": "निसांका", "charith": "चरिथ", "asalanka": "असलंका",
+    "kusal": "कुसल", "mendis": "मेंडिस", "kamindu": "कमिंदु", "dhananjaya": "धनंजय",
+    "silva": "सिल्वा", "angelo": "एंजेलो", "mathews": "मैथ्यूज़", "wanindu": "वानिंदु",
+    "hasaranga": "हसरंगा", "maheesh": "महेश", "theekshana": "थीक्षना", "dilshan": "दिलशान",
+    "madushanka": "मदुशंका", "perera": "परेरा", "chandimal": "चांदीमल", "root": "रूट",
+    "stokes": "स्टोक्स", "buttler": "बटलर", "brook": "ब्रूक", "jofra": "जोफ्रा",
+    "archer": "आर्चर", "adil": "आदिल", "rashid": "रशीद", "mark": "मार्क", "wood": "वुड",
 }
-
+PLAYER_NAME_PRONUNCIATIONS = {
+    "dasun shanaka": "दासुन शनाका", "pavan rathnayake": "पवन रथनायके",
+    "liam dawson": "लियाम डॉसन", "avishka fernando": "अविश्का फर्नांडो",
+    "jamie overton": "जेमी ओवरटन", "wiaan mulder": "वियान मुल्डर",
+    "beau webster": "बो वेब्स्टर", "pathum nissanka": "पथुम निसांका",
+    "charith asalanka": "चरिथ असलंका", "kusal mendis": "कुसल मेंडिस",
+    "kamindu mendis": "कमिंदु मेंडिस", "dhananjaya de silva": "धनंजय डी सिल्वा",
+    "angelo mathews": "एंजेलो मैथ्यूज़", "wanindu hasaranga": "वानिंदु हसरंगा",
+    "maheesh theekshana": "महेश थीक्षना", "dilshan madushanka": "दिलशान मदुशंका",
+    "kusal perera": "कुसल परेरा", "dinesh chandimal": "दिनेश चांदीमल",
+    "joe root": "जो रूट", "ben stokes": "बेन स्टोक्स", "jos buttler": "जोस बटलर",
+    "harry brook": "हैरी ब्रूक", "jofra archer": "जोफ्रा आर्चर",
+    "adil rashid": "आदिल रशीद", "mark wood": "मार्क वुड",
+}
 PHONIC_RULES = (
     ("sh", "श"), ("ch", "च"), ("th", "थ"), ("ph", "फ"), ("kh", "ख"),
     ("gh", "घ"), ("bh", "भ"), ("dh", "ध"), ("jh", "झ"), ("ee", "ी"),
@@ -184,117 +207,89 @@ PHONIC_RULES = (
     ("p", "प"), ("q", "क"), ("r", "र"), ("s", "स"), ("t", "ट"),
     ("u", "ु"), ("v", "व"), ("w", "व"), ("x", "क्स"), ("y", "य"), ("z", "ज़"),
 )
+INITIAL_VOWELS = {"aa": "आ", "ee": "ई", "oo": "ऊ", "ai": "ऐ", "au": "औ",
+                  "a": "अ", "e": "ए", "i": "इ", "o": "ओ", "u": "उ"}
+_NAME_NOISE = re.compile(r"\b(to|w|wd|nb|wide|no\s*runs?|runs?|dots?|out|c|b|wkt|wk|lb|st|\d+)\b", re.I)
 
-INITIAL_VOWELS = {
-    "aa": "आ", "ee": "ई", "oo": "ऊ", "ai": "ऐ", "au": "औ",
-    "a": "अ", "e": "ए", "i": "इ", "o": "ओ", "u": "उ",
-}
 
-_NAME_NOISE = re.compile(
-    r"\b(to|w|wd|nb|wide|no\s*runs?|runs?|dots?|out|c|b|wkt|wk|lb|st|\d+)\b",
-    flags=re.IGNORECASE,
-)
+def _phonetic_word_to_hindi(key: str) -> str:
+    out, index = "", 0
+    while index < len(key):
+        for pattern, replacement in PHONIC_RULES:
+            if key.startswith(pattern, index):
+                if index == 0 and pattern in INITIAL_VOWELS:
+                    replacement = INITIAL_VOWELS[pattern]
+                out += replacement
+                index += len(pattern)
+                break
+        else:
+            index += 1
+    return out or key
 
 
 def clean_player_name_to_hindi(raw_name: Optional[str]) -> str:
     if not raw_name:
         return ""
-    cleaned = _NAME_NOISE.sub("", raw_name)
+    cleaned = _NAME_NOISE.sub(" ", str(raw_name))
     cleaned = re.sub(r"[^A-Za-z\s']", " ", cleaned).strip()
-    result = []
+    out = []
     for word in cleaned.split():
         key = word.lower().replace("'", "")
-        if not key:
-            continue
-        if key in COMMON_NAMES:
-            result.append(COMMON_NAMES[key])
-            continue
-        word_hi, idx = "", 0
-        while idx < len(key):
-            matched = False
-            for pattern, repl in PHONIC_RULES:
-                if key.startswith(pattern, idx):
-                    if idx == 0 and pattern in INITIAL_VOWELS:
-                        repl = INITIAL_VOWELS[pattern]
-                    word_hi += repl
-                    idx += len(pattern)
-                    matched = True
-                    break
-            if not matched:
-                idx += 1
-        result.append(word_hi if word_hi else word)
-    return " ".join(result)
+        if key:
+            out.append(COMMON_NAMES.get(key) or _phonetic_word_to_hindi(key))
+    return " ".join(out)
 
 
-def _number(token: str, default: int = 0) -> int:
-    match = re.search(r"\d+", token or "")
-    return int(match.group(0)) if match else default
-
-
-def _player_names(info: Dict[str, Any]) -> tuple[str, str]:
-    """Prefer the names attached to this delivery, especially on a wicket."""
-    matchup = _space(info.get("matchup"))
-    bowler = _space(info.get("bowler"))
-    batter = _space(info.get("batter") or info.get("striker"))
-
-    # CREX English layout: "Kagiso Rabada to Marnus Labuschagne".
-    parts = re.split(r"\s+to\s+", matchup, maxsplit=1, flags=re.IGNORECASE)
+def _pronunciation_context_names(context=None):
+    if not isinstance(context, dict):
+        return []
+    names = []
+    def add(value):
+        if isinstance(value, str):
+            value = re.sub(r"\s+", " ", value).strip(" \t\r\n,.:;")
+            if value and len(value) >= 3 and re.search(r"[A-Za-z]", value):
+                if value.lower() not in {"batter", "batsman", "bowler", "unknown", "innings", "team"} and value not in names:
+                    names.append(value)
+    for key in ("bowler", "batsman", "batter", "striker", "non_striker", "fielder",
+                "player", "dismissed_batter", "dismissed_player"):
+        add(context.get(key))
+    parts = re.split(r"\s+to\s+", str(context.get("matchup") or ""), maxsplit=1, flags=re.I)
     if len(parts) == 2:
-        bowler, batter = parts[0].strip(" ,:."), parts[1].strip(" ,:.")
-    elif "," in matchup:
-        # Hindi/localized CREX layout: "कागिसो रबाडा, मार्नस लाबुशाने को".
-        left, right = matchup.split(",", 1)
-        bowler = left.strip(" ,:.")
-        batter = re.sub(r"\s*(?:को|to)\s*$", "", right.strip(" ,:."), flags=re.IGNORECASE)
-
-    return bowler, batter
-
-def _active_batter_score(info: Dict[str, Any], lang: str) -> str:
-    """Compact live scorecard add-on; never uses CREX commentary prose."""
-    players = []
-    for prefix in ("striker", "non_striker"):
-        name = _space(info.get(prefix))
-        runs = info.get(f"{prefix}_runs")
-        balls = info.get(f"{prefix}_balls")
-        if not name or name.lower().startswith("batter ") or runs is None or balls is None:
-            continue
-        try:
-            runs_i, balls_i = int(runs), int(balls)
-        except (TypeError, ValueError):
-            continue
-        identity = _compact(name)
-        if any(item[0] == identity for item in players):
-            continue
-        players.append((identity, name, runs_i, balls_i))
-
-    if not players:
-        return ""
-    # Keep the score suffix short so Madhur can finish well before the next delivery.
-    batting_line = ", ".join(
-        f"{name} {runs} off {balls}" for _, name, runs, balls in players
+        add(parts[0]); add(parts[1])
+    dismissal = context.get("last_dismissal") or context.get("lastDismissal") or context.get("dismissal_card") or {}
+    if isinstance(dismissal, dict):
+        for key in ("batter", "batsman", "bowler", "fielder", "player", "name", "dismissed_player"):
+            add(dismissal.get(key))
+        how_out = str(dismissal.get("howOut") or dismissal.get("how_out") or "")
+    else:
+        how_out = str(dismissal or "")
+    patterns = (
+        r"\bc\s+([A-Za-z][A-Za-z .'-]+?)\s+b\s+([A-Za-z][A-Za-z .'-]+)$",
+        r"\bst\s+([A-Za-z][A-Za-z .'-]+?)\s+b\s+([A-Za-z][A-Za-z .'-]+)$",
     )
-    team_runs, team_wickets = info.get("total_runs"), info.get("total_wickets")
-    try:
-        # Say the score naturally instead of reading the slash aloud.
-        score = f"{int(team_runs)} for {int(team_wickets)}"
-    except (TypeError, ValueError):
-        score = ""
-    # Keep score and batter figures in Hinglish even when the voice dropdown says Hindi.
-    return f"Score {score}. {batting_line}." if score else f"Batters: {batting_line}."
+    match = next((m for p in patterns if (m := re.search(p, how_out, re.I))), None)
+    if match:
+        add(match.group(1)); add(match.group(2))
+    else:
+        match = re.search(r"\bb\s+([A-Za-z][A-Za-z .'-]+)$", how_out, re.I)
+        if match:
+            add(match.group(1))
+    return sorted(names, key=len, reverse=True)
 
-def _wicket_type(source: str) -> str:
-    text = (source or "").lower()
-    if re.search(r"\b(run[\s-]?out|runout)\b|रन आउट", text):
-        return "runout"
-    if re.search(r"\b(stumped|stumping)\b|स्टंप्ड|स्टंपिंग", text):
-        return "stumped"
-    if re.search(r"\b(lbw|leg before wicket)\b|एलबीडब्ल्यू", text):
-        return "lbw"
-    if re.search(r"\b(bowled|clean bowled)\b|बोल्ड|स्टंप्स बिखर", text):
-        return "bowled"
-    if re.search(r"\b(caught|catch|catches)\b|कैच|पकड़ा|पकड़", text):
-        return "caught"
-    return "wicket"
+
+def prepare_tts_pronunciation_text(text, context=None):
+    result = str(text or "")
+    for name, phonetic in sorted(PLAYER_NAME_PRONUNCIATIONS.items(), key=lambda x: len(x[0]), reverse=True):
+        result = re.sub(r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])", phonetic, result, flags=re.I)
+    for name in _pronunciation_context_names(context):
+        pattern = r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])"
+        if re.search(pattern, result, flags=re.I):
+            phonetic = PLAYER_NAME_PRONUNCIATIONS.get(name.lower()) or clean_player_name_to_hindi(name)
+            result = re.sub(pattern, lambda _: phonetic, result, flags=re.I)
+    for name, phonetic in sorted(COMMON_NAMES.items(), key=lambda x: len(x[0]), reverse=True):
+        if len(name) >= 3:
+            result = re.sub(r"(?<![A-Za-z])" + re.escape(name) + r"(?![A-Za-z])", phonetic, result, flags=re.I)
+    return result
 
 # ============================================================
 # DELIVERY BADGE PARSER
@@ -1023,6 +1018,7 @@ def build_live_circle_announcement(
 
     return {
         "spoken_text": " ".join(speech.split()),
+        "tts_text": prepare_tts_pronunciation_text(" ".join(speech.split()), info),
         "circle_value": token,
         "event": event_kind,
         "badge": badge,
