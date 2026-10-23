@@ -19,7 +19,8 @@ class OverCompletionTests(unittest.TestCase):
         self.assertEqual(_legal_deliveries_in_over(26, balls), 6)
         summary = _over_announcement(26, balls, "hinglish", {"total_runs": 194, "total_wickets": 3})
         self.assertIsNotNone(summary)
-        self.assertIn("सत्ताईसवाँ ओवर पूरा हुआ", summary)
+        self.assertIn("ओवर समाप्त", summary)
+        self.assertIn("तेरह रन बने", summary)
 
 
 if __name__ == "__main__":

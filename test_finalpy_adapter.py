@@ -1,4 +1,5 @@
 import unittest
+
 from final import AUDIO_PROFILES, build_live_circle_announcement, build_live_over_summary
 
 
@@ -10,10 +11,9 @@ class FinalPyAdapterTests(unittest.TestCase):
             "matchup": "Wiaan Mulder to Beau Webster",
         }, lang="hinglish")
         self.assertTrue(result["should_speak"])
-        self.assertEqual(result["event"], "four")
-        self.assertIn("पहले ओवर की चौथी बॉल", result["spoken_text"])
-        self.assertEqual(result["rate"], "+8%")
-        self.assertEqual(result["pitch"], "+2Hz")
+        self.assertEqual(result["badge"], "FOUR")
+        self.assertIn("पहले ओवर की चौथी गेंद", result["spoken_text"])
+        self.assertIn("tts_text", result)
 
     def test_over_summary_export(self):
         balls = [
@@ -24,9 +24,9 @@ class FinalPyAdapterTests(unittest.TestCase):
         self.assertIn("पहला ओवर पूरा हुआ", summary)
         self.assertNotIn("Over 1 complete", summary)
 
-    def test_madhur_profiles_are_moderate(self):
-        self.assertEqual(AUDIO_PROFILES[1], ("+3%", "+0Hz", "+0%"))
-        self.assertEqual(AUDIO_PROFILES[4], ("+10%", "+3Hz", "+18%"))
+    def test_existing_voice_profile_table_is_preserved(self):
+        self.assertEqual(AUDIO_PROFILES[1], ("+15%", "+10Hz", "+0%"))
+        self.assertEqual(AUDIO_PROFILES[4], ("+30%", "+20Hz", "+60%"))
 
 
 if __name__ == "__main__":

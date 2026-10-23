@@ -481,41 +481,63 @@ def _delivery_stats(token: Any) -> tuple[int, bool, int, int, int]:
     return (0, True, 0, 0, 0)
 
 
-def _fast_circle_announcement(token: Any, lang: str = "hi") -> str:
-    """Very short event-only voice call; do not synthesize a long narrative for each ball."""
+def _fast_circle_announcement(token: Any, lang: str = "hi", ball_info: Optional[Dict[str, Any]] = None) -> str:
+    """Fast circle call that includes players when relevant; names are pronunciation-mapped for TTS."""
     raw = _normal_space(token).lower().replace(" ", "")
     language = _normal_space(lang).lower()
+    info = ball_info or {}
+    batter = _normal_space(info.get("batsman") or info.get("batter") or info.get("striker"))
+    bowler = _normal_space(info.get("bowler") or info.get("current_bowler"))
+    hindi_script = language in {"hi", "hindi", "hinglish", "hi-en", "hi_en"}
+
     if raw in {"w", "wkt", "out"} or "wicket" in raw:
-        return "विकेट!" if language == "hi" else "Wicket!"
+        if hindi_script and batter and bowler:
+            return f"विकेट! {batter} आउट हो गए। {bowler} की गेंद पर बड़ा झटका!"
+        if hindi_script and batter:
+            return f"विकेट! {batter} आउट हो गए।"
+        return "विकेट!" if hindi_script else f"Wicket! {batter + ' is out!' if batter else ''}".strip()
+
     if "wd" in raw or "wide" in raw:
-        return "वाइड!" if language == "hi" else "Wide!"
+        return "वाइड बॉल! एक अतिरिक्त रन।" if hindi_script else "Wide ball! Extra run."
     if "nb" in raw or "noball" in raw:
-        return "नो बॉल!" if language == "hi" else "No-ball!"
+        return "नो बॉल! अगली गेंद पर फ्री हिट।" if hindi_script else "No-ball! Free hit next."
     if "lb" in raw:
-        return "लेग बाई!" if language == "hi" else "Leg bye!"
+        return "लेग बाई के रन।" if hindi_script else "Leg byes."
     if raw == "b" or re.fullmatch(r"\d*b|b\d*", raw):
-        return "बाई!" if language == "hi" else "Bye!"
+        return "बाई के रन।" if hindi_script else "Byes."
     if raw in {"•", ".", "dot", "dotball"}:
-        return "डॉट बॉल!" if language == "hi" else "Dot ball!"
+        return "डॉट बॉल!" if hindi_script else "Dot ball!"
+
     if raw.isdigit():
         n = int(raw)
-        if language == "hi":
-            calls = {
-                0: "डॉट बॉल!", 1: "एक रन!", 2: "दो रन!", 3: "तीन रन!",
-                4: "चौका!", 5: "पाँच रन!", 6: "छक्का!", 7: "सात रन!",
-                8: "आठ रन!", 9: "नौ रन!", 10: "दस रन!",
-            }
-            return calls.get(n, f"{number_to_hindi_words(n)} रन!")
-        if language == "hinglish":
-            calls = {0: "Dot ball!", 1: "Single!", 2: "Two runs!", 3: "Three runs!",
-                     4: "Chauka!", 5: "Five runs!", 6: "Chhakka!", 7: "Seven runs!"}
-            return calls.get(n, f"{n} runs!")
-        calls = {0: "Dot ball!", 1: "One run!", 2: "Two runs!", 3: "Three runs!",
-                 4: "Four!", 5: "Five runs!", 6: "Six!"}
-        return calls.get(n, f"{n} runs!")
-    return "अगली गेंद!" if language == "hi" else "Next ball!"
-
-
+        if hindi_script:
+            if n == 0:
+                return "डॉट बॉल!"
+            if n == 1:
+                return f"{batter} ने एक रन लेकर स्ट्राइक बदल ली।" if batter else "एक रन लेकर स्ट्राइक बदल ली।"
+            if n == 2:
+                return f"{batter} ने दो रन पूरे किए।" if batter else "दो रन पूरे किए।"
+            if n == 3:
+                return f"{batter} ने तीन रन पूरे किए।" if batter else "तीन रन पूरे किए।"
+            if n == 4:
+                return f"{batter} का शानदार चौका!" if batter else "शानदार चौका!"
+            if n == 6:
+                return f"{batter} का शानदार छक्का! गेंद बाउंड्री के बाहर।" if batter else "शानदार छक्का! गेंद बाउंड्री के बाहर।"
+            return f"{number_to_hindi_words(n)} रन!"
+        if n == 0:
+            return "Dot ball!"
+        if n == 1:
+            return f"{batter} takes a quick single." if batter else "Single!"
+        if n == 2:
+            return f"{batter} gets two runs." if batter else "Two runs!"
+        if n == 3:
+            return f"{batter} gets three runs." if batter else "Three runs!"
+        if n == 4:
+            return f"Great four from {batter}!" if batter else "Four!"
+        if n == 6:
+            return f"Massive six from {batter}!" if batter else "Six!"
+        return f"{n} runs!"
+    return "अगली गेंद!" if hindi_script else "Next ball!"
 def _fast_circle_badge(token: Any) -> str:
     """Badge-only display label and short TTS profile selector."""
     raw = _normal_space(token).lower().replace(" ", "")
@@ -1573,7 +1595,7 @@ class BroadcastHub:
                                         "over": _normal_space(latest_ball.get("over")),
                                     }
                                     # Use the CREX circle result directly for a short, fast voice call.
-                                    radio_preview = _fast_circle_announcement(circle_token, lang)
+                                    radio_preview = _fast_circle_announcement(circle_token, lang, live_info)
                                     radio_tts_preview = prepare_tts_pronunciation_text(radio_preview, live_info)
                                     event_id = latest_key
                                     radio_badge = _fast_circle_badge(circle_token)

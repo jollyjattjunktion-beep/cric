@@ -1034,6 +1034,14 @@ def build_live_circle_announcement(
 
 
 
+def _safe_int(value, default=None):
+    """Safely parse an optional integer used in over-summary metadata."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+
+
 def _over_nominative_hindi(over_number: int) -> str:
     """Grammatical subject form: 'सत्ताईसवाँ ओवर पूरा हुआ'."""
     direct = {
