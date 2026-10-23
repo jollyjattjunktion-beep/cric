@@ -29,8 +29,7 @@ except ImportError:  # REST/HTML feed remains a fallback if Chromium is unavaila
 
 # Import existing core modules
 from cricket_streamer import CrexParser, create_tts, get_live_matches, resolve_match_url
-from human_commentator import commentator, build_live_over_summary
-from final import build_live_circle_announcement
+from human_commentator import commentator, number_to_hindi_words, over_ordinal_hindi
 
 logging.basicConfig(
     level=logging.INFO,
@@ -38,6 +37,12 @@ logging.basicConfig(
     datefmt="%H:%M:%S"
 )
 logger = logging.getLogger("WebServer")
+
+def prepare_tts_pronunciation_text(text, ball_info=None):
+    """Low-overhead TTS text cleanup used by the existing voice pipeline."""
+    value = re.sub(r"<[^>]+>", " ", str(text or ""))
+    return " ".join(value.replace("\\n", " ").split())
+
 
 BASE_DIR = Path(__file__).resolve().parent
 WEB_DIR = BASE_DIR  # Flat project: index.html, app.js and style.css sit beside server.py.
@@ -474,6 +479,60 @@ def _delivery_stats(token: Any) -> tuple[int, bool, int, int, int]:
     return (0, True, 0, 0, 0)
 
 
+def _fast_circle_announcement(token: Any, lang: str = "hi") -> str:
+    """Very short event-only voice call; do not synthesize a long narrative for each ball."""
+    raw = _normal_space(token).lower().replace(" ", "")
+    language = _normal_space(lang).lower()
+    if raw in {"w", "wkt", "out"} or "wicket" in raw:
+        return "विकेट!" if language == "hi" else "Wicket!"
+    if "wd" in raw or "wide" in raw:
+        return "वाइड!" if language == "hi" else "Wide!"
+    if "nb" in raw or "noball" in raw:
+        return "नो बॉल!" if language == "hi" else "No-ball!"
+    if "lb" in raw:
+        return "लेग बाई!" if language == "hi" else "Leg bye!"
+    if raw == "b" or re.fullmatch(r"\d*b|b\d*", raw):
+        return "बाई!" if language == "hi" else "Bye!"
+    if raw.isdigit():
+        n = int(raw)
+        if language == "hi":
+            calls = {
+                0: "डॉट बॉल!", 1: "एक रन!", 2: "दो रन!", 3: "तीन रन!",
+                4: "चौका!", 5: "पाँच रन!", 6: "छक्का!", 7: "सात रन!",
+                8: "आठ रन!", 9: "नौ रन!", 10: "दस रन!",
+            }
+            return calls.get(n, f"{number_to_hindi_words(n)} रन!")
+        if language == "hinglish":
+            calls = {0: "Dot ball!", 1: "Single!", 2: "Two runs!", 3: "Three runs!",
+                     4: "Chauka!", 5: "Five runs!", 6: "Chhakka!", 7: "Seven runs!"}
+            return calls.get(n, f"{n} runs!")
+        calls = {0: "Dot ball!", 1: "One run!", 2: "Two runs!", 3: "Three runs!",
+                 4: "Four!", 5: "Five runs!", 6: "Six!"}
+        return calls.get(n, f"{n} runs!")
+    return "अगली गेंद!" if language == "hi" else "Next ball!"
+
+
+def _fast_circle_badge(token: Any) -> str:
+    """Badge-only display label and short TTS profile selector."""
+    raw = _normal_space(token).lower().replace(" ", "")
+    if raw in {"w", "wkt", "out"} or "wicket" in raw:
+        return "WICKET"
+    if "wd" in raw or "wide" in raw:
+        return "WIDE"
+    if "nb" in raw or "noball" in raw:
+        return "NO BALL"
+    if "lb" in raw:
+        return "LEG BYE"
+    if raw == "b" or re.fullmatch(r"\d*b|b\d*", raw):
+        return "BYE"
+    if raw.isdigit() and int(raw) == 4:
+        return "FOUR"
+    if raw.isdigit() and int(raw) >= 6:
+        return "SIX"
+    if raw.isdigit() and int(raw) == 0:
+        return "DOT BALL"
+    return "RUNS"
+
 def _legal_deliveries_in_over(over_index: int, balls: list[Dict[str, Any]]) -> int:
     """Count legal deliveries from one over; wides and no-balls do not count."""
     seen = set()
@@ -492,23 +551,55 @@ def _legal_deliveries_in_over(over_index: int, balls: list[Dict[str, Any]]) -> i
 
 
 def _over_announcement(over_index: int, balls: list[Dict[str, Any]], lang: str, score_state: Optional[Dict[str, Any]] = None) -> Optional[str]:
-    """Return one Hindi/Hinglish recap only when six legal balls are verified."""
+    """Build a concise Hindi recap only after six legal deliveries are verified."""
     rows = [b for b in balls if _ball_over_index(b) == over_index]
-    legal_count = _legal_deliveries_in_over(over_index, rows)
-    if legal_count != 6:
+    if _legal_deliveries_in_over(over_index, rows) != 6:
         return None
-    # Rendered snapshots can contain a partial current-over strip. Never announce
-    # based only on a stale completion flag or a partial list of circles.
-    if any(b.get("rendered_circle") for b in rows):
-        rendered = next((b for b in reversed(rows) if b.get("rendered_circle")), None)
-        tokens = (rendered or {}).get("over_balls") or []
-        if tokens:
-            token_legal = sum(1 for token in tokens if _delivery_stats(str(token).strip().upper())[1])
-            if token_legal != 6:
-                return None
-    summary = build_live_over_summary(over_index, rows, score_state=score_state, lang=lang)
-    return summary or None
 
+    rendered = next((b for b in reversed(rows) if b.get("rendered_circle")), None)
+    if rendered:
+        tokens = rendered.get("over_balls") or []
+        if tokens and sum(1 for token in tokens if _delivery_stats(str(token).strip().upper())[1]) != 6:
+            return None
+
+    over_runs = fours = sixes = wickets = 0
+    seen_slots = set()
+    for ball in rows:
+        slot = _ball_slot_key(ball)
+        if slot in seen_slots:
+            continue
+        seen_slots.add(slot)
+        runs, _legal, four_count, six_count, wicket_count = _delivery_stats(
+            ball.get("circle_val") or ball.get("runs", "")
+        )
+        over_runs += runs
+        fours += four_count
+        sixes += six_count
+        wickets += wicket_count
+
+    spoken_over = over_ordinal_hindi(int(over_index) + 1)
+    text = f"ओवर समाप्त! {spoken_over} ओवर में {number_to_hindi_words(over_runs)} रन बने।"
+    details = []
+    if fours:
+        details.append("एक चौका" if fours == 1 else f"{number_to_hindi_words(fours)} चौके")
+    if sixes:
+        details.append("एक छक्का" if sixes == 1 else f"{number_to_hindi_words(sixes)} छक्के")
+    if wickets:
+        details.append("एक विकेट" if wickets == 1 else f"{number_to_hindi_words(wickets)} विकेट")
+    if details:
+        text += " " + " और ".join(details) + "।"
+
+    score_state = score_state or {}
+    try:
+        total_runs = int(score_state.get("total_runs"))
+        total_wickets = int(score_state.get("total_wickets"))
+        if total_wickets == 0:
+            text += f" स्कोर {number_to_hindi_words(total_runs)} रन, बिना किसी विकेट के नुकसान के।"
+        else:
+            text += f" स्कोर {number_to_hindi_words(total_runs)} रन, {number_to_hindi_words(total_wickets)} विकेट के नुकसान पर।"
+    except (TypeError, ValueError):
+        pass
+    return text
 
 def _audio_duration_seconds(mp3_data: bytes) -> float:
     """Decode the MP3 length so commentary state covers the complete spoken clip."""
@@ -1477,19 +1568,17 @@ class BroadcastHub:
                                         "runs": circle_token,
                                         "over": _normal_space(latest_ball.get("over")),
                                     }
-                                    # Generate the manual ball call with the same pro scripts
-                                    # used by final.py; the CREX paragraph is never a speech fallback.
-                                    radio_meta = build_live_circle_announcement(live_info, lang=lang) or {}
-                                    radio_preview = _normal_space(
-                                        radio_meta.get("spoken_text") or f"Live ball {live_info['over']}."
-                                    )
-                                    radio_tts_preview = _normal_space(
-                                        radio_meta.get("tts_text") or prepare_tts_pronunciation_text(radio_preview, live_info)
-                                    )
+                                    # Use the CREX circle result directly for a short, fast voice call.
+                                    radio_preview = _fast_circle_announcement(circle_token, lang)
+                                    radio_tts_preview = radio_preview
                                     event_id = latest_key
-                                    radio_badge = radio_meta.get("badge") or _source_badge(latest_ball)
-                                    radio_rate = radio_meta.get("rate") or "+5%"
-                                    radio_pitch = radio_meta.get("pitch") or "+1Hz"
+                                    radio_badge = _fast_circle_badge(circle_token)
+                                    if radio_badge in {"SIX", "WICKET"}:
+                                        radio_rate, radio_pitch = "+30%", "+12Hz"
+                                    elif radio_badge == "FOUR":
+                                        radio_rate, radio_pitch = "+27%", "+8Hz"
+                                    else:
+                                        radio_rate, radio_pitch = "+25%", "+5Hz"
 
                                     self.latest_commentary = radio_preview
                                     self.latest_tts_debug = {
@@ -1519,7 +1608,7 @@ class BroadcastHub:
                                         "over": live_info["over"],
                                         "circle_value": circle_token,
                                         "status": "preparing_audio",
-                                        "voice_fallback_after_ms": 1300,
+                                        "voice_fallback_after_ms": 900,
                                     })
                                     await queue_latest({
                                         "version": latest_event_version,
