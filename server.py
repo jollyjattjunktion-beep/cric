@@ -493,6 +493,8 @@ def _fast_circle_announcement(token: Any, lang: str = "hi") -> str:
         return "लेग बाई!" if language == "hi" else "Leg bye!"
     if raw == "b" or re.fullmatch(r"\d*b|b\d*", raw):
         return "बाई!" if language == "hi" else "Bye!"
+    if raw in {"•", ".", "dot", "dotball"}:
+        return "डॉट बॉल!" if language == "hi" else "Dot ball!"
     if raw.isdigit():
         n = int(raw)
         if language == "hi":
@@ -529,7 +531,7 @@ def _fast_circle_badge(token: Any) -> str:
         return "FOUR"
     if raw.isdigit() and int(raw) >= 6:
         return "SIX"
-    if raw.isdigit() and int(raw) == 0:
+    if raw.isdigit() and int(raw) == 0 or raw in {"•", ".", "dot", "dotball"}:
         return "DOT BALL"
     return "RUNS"
 
