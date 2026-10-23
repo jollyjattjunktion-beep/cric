@@ -1048,7 +1048,7 @@ class BroadcastHub:
                 return None
             try:
                 mp3_data = await asyncio.wait_for(
-                    tts.speak_mp3(recap_tts_text, rate="+5%", pitch="+1Hz"),
+                    tts.speak_mp3(recap_tts_text, rate="+20%", pitch="+4Hz"),
                     timeout=4.5,
                 )
             except asyncio.TimeoutError:
