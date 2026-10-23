@@ -29,11 +29,8 @@ except ImportError:  # REST/HTML feed remains a fallback if Chromium is unavaila
 
 # Import existing core modules
 from cricket_streamer import CrexParser, create_tts, get_live_matches, resolve_match_url
-from human_commentator import commentator
-from final import build_live_circle_announcement, build_over_summary
-
 from human_commentator import commentator, build_live_over_summary
-from final import build_live_circle_announcement, build_over_summary
+from final import build_live_circle_announcement
 
 logging.basicConfig(
     level=logging.INFO,
