@@ -1637,6 +1637,14 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "server_build": "pro-commentary-engine-20261022-2",
     })
 
+async def handle_api_health(request: web.Request) -> web.Response:
+    """Small health endpoint for external keep-awake probes; never depends on a browser."""
+    return web.json_response({
+        "ok": True,
+        "is_running": bool(hub.is_running),
+        "broadcast_status": hub.latest_start_debug.get("status", "idle"),
+    })
+
 async def handle_api_live_matches(request: web.Request) -> web.Response:
     matches = await asyncio.to_thread(get_live_matches)
     return web.json_response({"ok": True, "matches": matches})
@@ -1721,6 +1729,7 @@ def create_app() -> web.Application:
     app.router.add_get("/favicon.ico", handle_favicon)
     app.router.add_get("/ws", handle_ws)
     app.router.add_get("/api/status", handle_api_status)
+    app.router.add_get("/api/health", handle_api_health)
     app.router.add_get("/api/live-matches", handle_api_live_matches)
     app.router.add_post("/api/resolve", handle_api_resolve)
     app.router.add_post("/api/start", handle_api_start)
