@@ -3,7 +3,6 @@
 PREET SPORTS - Professional Cricket Radio Engine (Pro Commentary Edition)
 =========================================================================
 - Voice : Microsoft Edge-TTS (hi-IN-MadhurNeural)
-- Effects : LIVE STADIUM MIXING (Sidechain compression, Reverb, Headset EQ)
 - Wicket: pairs the dismissal card with the batter on the delivery row
 - Radio : rich lines for 4, 6, wickets (caught / bowled / lbw / run out /
           stumped), wides, no-balls and an over-by-over summary
@@ -11,16 +10,15 @@ PREET SPORTS - Professional Cricket Radio Engine (Pro Commentary Edition)
 
 Usage
 -----
-    python crex_radio_pro.py                 # asks for a CREX URL
-    python crex_radio_pro.py <CREX_URL>      # no prompt
-    python crex_radio_pro.py --demo          # speak sample 4/6/wicket/over lines
-    python crex_radio_pro.py <URL> --debug   # print raw page snapshots
+    python live_commentary.py                 # asks for a CREX URL
+    python live_commentary.py <CREX_URL>      # no prompt
+    python live_commentary.py --demo          # speak sample 4/6/wicket/over lines
+    python live_commentary.py <URL> --debug   # print raw page snapshots
 
 Setup
 -----
     pip install edge-tts playwright
     playwright install chromium
-    (Ensure ffmpeg is installed and added to Windows PATH)
 """
 from __future__ import annotations
 
@@ -32,10 +30,9 @@ import random
 import re
 import sys
 import tempfile
-import subprocess
 import time
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 import edge_tts
@@ -52,12 +49,12 @@ DEFAULT_URL = (
     "https://crex.com/cricket-live-score/"
     "abd-vs-emb-2nd-semi-final-emirates-d10-league-2026-match-updates-14NA"
 )
-POLL_SECONDS = 2.0
-OVER_SETTLE_SECONDS = 2.5
-WICKET_CARD_WAIT_SECONDS = 1.2
+POLL_SECONDS = 0.5
+OVER_SETTLE_SECONDS = 0.8
+WICKET_CARD_WAIT_SECONDS = 0.5
 PAGE_LOAD_TIMEOUT_MS = 45_000
 RELOAD_AFTER_FAILURES = 5
-TTS_TIMEOUT_SECONDS = 25
+TTS_TIMEOUT_SECONDS = 12
 VOICE_NAME = "hi-IN-MadhurNeural"
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -76,12 +73,12 @@ BLOCKED_URL_PATTERNS = (
     "adsystem", "adnxs", "amazon-adsystem",
 )
 
-# Voice delivery per excitement l0evel: (rate, pitch, volume)
+# Voice delivery per excitement level: (rate, pitch)
 AUDIO_PROFILES = {
-    1: ("+15%", "+10Hz", "+0%"),    # Level 1 (Dot balls): Normal speaking volume
-    2: ("+20%", "+12Hz", "+15%"),   # Level 2 (Singles/Extras): Slightly louder
-    3: ("+25%", "+15Hz", "+35%"),   # Level 3 (Fours): Loud and punchy
-    4: ("+30%", "+20Hz", "+60%"),   # Level 4 (Sixes/Wickets): Shouting over the crowd
+    1: ("+3%", "+0Hz"),    # dot ball
+    2: ("+8%", "+1Hz"),    # singles, extras, over summary
+    3: ("+12%", "+3Hz"),   # four
+    4: ("+15%", "+5Hz"),   # six, wicket
 }
 
 log = logging.getLogger("crex_radio")
@@ -208,7 +205,6 @@ def format_over_phrase_hindi(ball_str: str) -> str:
         return "इस ओवर में"
 
 
-
 # ============================================================
 # MASTER PHONETIC DICTIONARY
 # ============================================================
@@ -239,6 +235,7 @@ PHONIC_RULES = (
     ("u", "ु"), ("v", "व"), ("w", "व"), ("x", "क्स"), ("y", "य"), ("z", "ज़"),
 )
 
+# A vowel at the START of a word needs its independent form, not a matra.
 INITIAL_VOWELS = {
     "aa": "आ", "ee": "ई", "oo": "ऊ", "ai": "ऐ", "au": "औ",
     "a": "अ", "e": "ए", "i": "इ", "o": "ओ", "u": "उ",
@@ -248,7 +245,6 @@ _NAME_NOISE = re.compile(
     r"\b(to|w|wd|nb|wide|no\s*runs?|runs?|dots?|out|c|b|wkt|wk|lb|st|\d+)\b",
     flags=re.IGNORECASE,
 )
-
 
 
 def clean_player_name_to_hindi(raw_name: Optional[str]) -> str:
@@ -280,10 +276,16 @@ def clean_player_name_to_hindi(raw_name: Optional[str]) -> str:
         result.append(word_hi if word_hi else word)
     return " ".join(result)
 
+
 # ============================================================
 # DELIVERY BADGE PARSER
 # ============================================================
 def classify_delivery(token: Optional[str]) -> dict:
+    """
+    Turn a ball badge ('4', 'W', 'Wd', '2nb', '1lb', ...) into
+    {kind, runs, legal}.  kind: wicket | wide | noball | legbye | bye | runs | dot
+    Runs on extras are a best-effort reading of the badge.
+    """
     t = re.sub(r"[\s+]", "", (token or "").strip().lower())
     num = re.search(r"\d+", t)
     n = int(num.group()) if num else None
@@ -377,7 +379,7 @@ DOUBLE_LINES = (
     "सॉफ्ट हैंड्स से धकेला, बढ़िया तालमेल और दौड़कर दो रन निकाले!",
 )
 THREE_LINE = "शानदार रनिंग बिटवीन द विकेट्स, दोनों बल्लेबाज़ों ने दौड़कर तीन रन पूरे किए!"
-FIVE_LINE = "पांच रन! ओवरथ्रो का फायदा या बेहतरीन दौड़, बल्लेबाज़ों नेत पांच रन बटोर लिए!"
+FIVE_LINE = "पांच रन! ओवरथ्रो का फायदा या बेहतरीन दौड़, बल्लेबाज़ों ने पांच रन बटोर लिए!"
 
 WIDE_LINES = (
     "दिशाहीन गेंदबाज़ी, लेग स्टंप से काफ़ी बाहर, अंपायर ने दोनों हाथ फैलाए, वाइड!",
@@ -419,6 +421,7 @@ def pick_tag(tags, batsman: str, bowler: str) -> str:
 # ------------------------------------------------------------
 _NAME = r"[a-z .'\-]"
 
+
 def build_live_wicket_speech(
     dismissal_text: str,
     batter_name: str,
@@ -443,6 +446,7 @@ def build_live_wicket_speech(
 
     d = re.sub(r"\s+", " ", (dismissal_text or "").lower()).strip()
 
+    # caught and bowled
     m = re.search(rf"\bc\s*&\s*b\s+({_NAME}+)", d)
     if m:
         bowler = clean_player_name_to_hindi(m.group(1))
@@ -451,6 +455,7 @@ def build_live_wicket_speech(
             f"कैच एंड बोल्ड! {bowler} ने ज़बरदस्त रिफ्लेक्स दिखाया, {who} वापस लौट रहे हैं!",
         ))
 
+    # caught
     m = re.search(rf"\bc\s+({_NAME}+?)\s+b\s+({_NAME}+)", d)
     if m:
         fielder = clean_player_name_to_hindi(m.group(1))
@@ -460,8 +465,11 @@ def build_live_wicket_speech(
             f"{who} पवेलियन लौट रहे हैं, {bowler} को मिली बड़ी कामयाबी!",
             f"बड़ा विकेट! शॉट गलत लगा और {fielder} ने कोई गलती नहीं की! "
             f"{who} कैच आउट, {bowler} की गेंद पर!",
+            f"आउट! आउट! {bowler} की गेंद पर {fielder} ने थामा शानदार कैच, "
+            f"{who} पवेलियन लौट रहे हैं!",
         ))
 
+    # stumped
     m = re.search(rf"\bst\s+({_NAME}+?)\s+b\s+({_NAME}+)", d)
     if m:
         keeper = clean_player_name_to_hindi(m.group(1))
@@ -471,6 +479,7 @@ def build_live_wicket_speech(
             f"{who} पवेलियन लौट रहे हैं, {bowler} की गेंद पर!"
         )
 
+    # lbw (checked before plain 'b' because the text is often 'lbw b Bowler')
     if "lbw" in d:
         m = re.search(rf"lbw\s+b\s+({_NAME}+)", d)
         bowler = clean_player_name_to_hindi(m.group(1)) if m else clean_player_name_to_hindi(bowler_name)
@@ -489,6 +498,7 @@ def build_live_wicket_speech(
     if "hit wicket" in d or "hitwicket" in d:
         return f"अपने ही स्टंप्स पर जा लगा बल्ला! हिट विकेट! {who} पवेलियन लौट रहे हैं!"
 
+    # bowled
     m = re.search(rf"\bb\s+({_NAME}+)", d)
     if m:
         bowler = clean_player_name_to_hindi(m.group(1))
@@ -496,8 +506,11 @@ def build_live_wicket_speech(
             f"गिल्लियां बिखर गईं! क्लीन बोल्ड! {bowler} की शानदार गेंद ने स्टंप उखाड़ दिए! "
             f"{who} पवेलियन लौट रहे हैं!",
             f"बोल्ड! बोल्ड! {bowler} ने बल्लेबाज़ को पूरी तरह छका दिया, {who} पवेलियन लौट रहे हैं!",
+            f"ज़बरदस्त गेंद! बल्ले और पैड के बीच से निकली और सीधी स्टंप्स में! "
+            f"{bowler} को मिला विकेट, {who} वापस लौट रहे हैं!",
         ))
 
+    # dismissal type unknown: say only what is certain (a wicket fell on this ball)
     bowler = clean_player_name_to_hindi(bowler_name)
     if bowler:
         return f"विकेट! विकेट! {bowler} की गेंद पर बड़ा झटका! {who} पवेलियन लौट रहे हैं!"
@@ -511,6 +524,7 @@ def score_after_wicket_phrase(runs: int, wkts: int) -> str:
     if wkts >= 10:
         phrase += " और ये आखिरी विकेट! पूरी टीम ऑल आउट!"
     return phrase
+
 
 # ------------------------------------------------------------
 # Ball-by-ball
@@ -530,6 +544,7 @@ def generate_circle_ball_commentary(
     d = classify_delivery(circle_val)
     kind, n = d["kind"], d["runs"]
 
+    # ---- WICKET: announce the batter from the delivery row, enrich from the card
     if kind == "wicket":
         batter_to_announce = batsman_raw or ""
         runs_s, balls_s, how_out = "", "", ""
@@ -547,12 +562,14 @@ def generate_circle_ball_commentary(
         speech = build_live_wicket_speech(how_out, batter_to_announce, runs_s, balls_s, bowler_raw or "")
         return f"{ball_phrase}, {speech}", 4
 
+    # ---- EXTRAS
     if kind == "wide":
         extra = f" अतिरिक्त {number_to_hindi_words(n)} रन।" if n > 1 else ""
         return f"{over_phrase} {random.choice(WIDE_LINES)}{extra}", 2
     if kind == "noball":
         return f"{over_phrase} {random.choice(NOBALL_LINES)}", 2
 
+    # ---- LEGAL DELIVERIES
     intro = build_intro(bowler, batsman)
     tag = ""
     if kind == "legbye":
@@ -580,6 +597,9 @@ def generate_circle_ball_commentary(
     return text, level
 
 
+# ------------------------------------------------------------
+# Over summary / innings end
+# ------------------------------------------------------------
 def _count_phrase(n: int, one: str, many: str) -> str:
     return one if n == 1 else f"{number_to_hindi_words(n)} {many}"
 
@@ -694,81 +714,20 @@ def play_mp3_native_windows(mp3_path: str) -> None:
     winmm.mciSendStringW(f"close {alias}", None, 0, 0)
 
 
-# ============================================================
-# BROADCAST MIXER & HUMANIZER
-# ============================================================
-def apply_stadium_effects(raw_voice_path: str, output_path: str) -> bool:
-    """Applies sidechain compression ducking and stadium headset echo via FFmpeg."""
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    crowd_bg = os.path.join(script_dir, "stadium_ambience.wav")
-
-    # Failsafe: Create silent dummy track if stadium file is missing so script never crashes
-    if not os.path.exists(crowd_bg):
-        subprocess.run([
-            "ffmpeg", "-y", "-f", "lavfi", "-i", "anullsrc=r=44100:cl=stereo", "-t", "5", crowd_bg
-        ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-
-    filter_complex = (
-        "[0:a]highpass=f=300,lowpass=f=4000,aecho=0.8:0.88:100|150:0.4|0.3,volume=1.5[voice_fx];"
-        "[1:a]volume=0.8[crowd_bg];"
-        "[crowd_bg][voice_fx]sidechaincompress=threshold=0.05:ratio=8:attack=10:release=400[ducked_crowd];"
-        "[voice_fx][ducked_crowd]amix=inputs=2:duration=first:normalize=0[out]"
-    )
-
-    command = [
-        "ffmpeg", "-y",
-        "-i", raw_voice_path,
-        "-stream_loop", "-1",
-        "-i", crowd_bg,
-        "-filter_complex", filter_complex,
-        "-map", "[out]",
-        "-c:a", "libmp3lame", "-q:a", "2",
-        "-ar", "44100",
-        output_path
-    ]
-
-    try:
-        subprocess.run(command, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        return True
-    except Exception as e:
-        log.error(f"FFmpeg Stadium Mix failed: {e}")
-        return False
-
-def humanize_text(text: str) -> str:
-    """Forces the AI to 'breathe' like a human by injecting micro-pauses at punctuation."""
-    clean = re.sub(r"<[^>]+>", " ", text).replace("\r", " ").replace("\n", " ").strip()
-    clean = clean.replace("!", "!... ")
-    clean = clean.replace("।", "।... ")
-    clean = clean.replace(",", ",... ")
-    return clean
-
-
 async def generate_and_play_audio(text: str, rate_level: int = 2) -> None:
     if not IS_WINDOWS:
         log.warning("Audio playback needs Windows (text only on this OS).")
         return
 
-    clean_text = humanize_text(text)
-    
-    # Unpack all three variables (rate, pitch, volume) from your updated AUDIO_PROFILES
-    rate_str, pitch_str, vol_str = AUDIO_PROFILES[min(max(rate_level, 1), 4)] 
-    
-    temp_dir = tempfile.gettempdir()
-    raw_mp3 = os.path.join(temp_dir, f"_raw_{os.getpid()}_{time.time_ns()}.mp3")
-    mixed_mp3 = os.path.join(temp_dir, f"_mixed_{os.getpid()}_{time.time_ns()}.mp3")
+    clean_text = re.sub(r"<[^>]+>", " ", text).replace("\r", " ").replace("\n", " ").strip()
+    rate_str, pitch_str = AUDIO_PROFILES[min(max(rate_level, 1), 4)]
+    temp_mp3 = os.path.join(tempfile.gettempdir(), f"_radio_{os.getpid()}_{time.time_ns()}.mp3")
 
     try:
         for attempt in (1, 2):
             try:
-                # Pass the volume=vol_str argument directly into the Communicate object
-                comm = edge_tts.Communicate(
-                    clean_text, 
-                    VOICE_NAME, 
-                    rate=rate_str, 
-                    pitch=pitch_str, 
-                    volume=vol_str
-                )
-                await asyncio.wait_for(comm.save(raw_mp3), timeout=TTS_TIMEOUT_SECONDS)
+                comm = edge_tts.Communicate(clean_text, VOICE_NAME, rate=rate_str, pitch=pitch_str)
+                await asyncio.wait_for(comm.save(temp_mp3), timeout=TTS_TIMEOUT_SECONDS)
                 break
             except Exception as e:
                 log.warning("TTS attempt %d failed: %s", attempt, e)
@@ -776,23 +735,16 @@ async def generate_and_play_audio(text: str, rate_level: int = 2) -> None:
                     return
                 await asyncio.sleep(0.5)
 
-        # APPLY THE PROFESSIONAL BROADCAST MIX
         loop = asyncio.get_running_loop()
-        success = await loop.run_in_executor(None, apply_stadium_effects, raw_mp3, mixed_mp3)
-        final_audio = mixed_mp3 if success else raw_mp3
-
-        # PLAY IT VIA WINDOWS MCI
-        await loop.run_in_executor(None, play_mp3_native_windows, final_audio)
-        
+        await loop.run_in_executor(None, play_mp3_native_windows, temp_mp3)
     except Exception as e:
         log.error("TTS Audio Error: %s", e)
     finally:
-        for f in (raw_mp3, mixed_mp3):
-            if os.path.exists(f):
-                try:
-                    os.remove(f)
-                except OSError:
-                    pass
+        if os.path.exists(temp_mp3):
+            try:
+                os.remove(temp_mp3)
+            except OSError:
+                pass
 
 
 class RadioAnnouncer:
@@ -804,6 +756,7 @@ class RadioAnnouncer:
         self._task = asyncio.create_task(self._worker(), name="radio_announcer")
 
     async def say(self, text: str, rate_level: int = 2, droppable: bool = False) -> None:
+        # Dots and singles are skipped when the radio is already behind.
         if droppable and self._queue.qsize() >= MAX_BACKLOG_FOR_MINOR_BALLS:
             log.info("Skipping minor commentary (queue backlog)")
             return
@@ -849,8 +802,8 @@ class BallSnapshot:
     is_over_complete: bool = False
     is_innings_break: bool = False
     last_dismissal: Optional[dict] = None
-    seq: Optional[str] = None
-    over_balls: Optional[list] = None
+    seq: Optional[str] = None            # "<over>:<every delivery incl. wides/no-balls>"
+    over_balls: Optional[list] = None    # badges of the over on screen, e.g. ["1","4","Wd","W"]
 
     @property
     def has_ball(self) -> bool:
@@ -863,8 +816,6 @@ class MatchState:
     last_wkts: Optional[int] = None
     innings_break_seen: bool = False
     match_overs: Optional[int] = None
-    # One over can be announced only once even if CREX repeats its last-circle snapshot.
-    announced_overs: set[int] = field(default_factory=set)
 
 
 EXTRACT_JS = r'''() => {
@@ -889,9 +840,8 @@ EXTRACT_JS = r'''() => {
         isInningsBreak = true;
     }
 
+    // 1. SCAN ONLY THE ACTIVE OVER STRIP
     let latestOverNum = null;
-    let latestOverLabel = -1;
-    let bestRowBallCount = -1;
     const overRows = document.querySelectorAll(
         'div[class*="over-card"], div[class*="recent-over"], div[class*="overRow"], div[class*="overWrap"], div[class*="over"]'
     );
@@ -908,15 +858,8 @@ EXTRACT_JS = r'''() => {
             if (BALL_TOKEN.test(val)) rowBalls.push(val);
         }
         if (rowBalls.length > 0 && rowBalls.length <= 12) {
-            // Nested DOM order is not chronological. Keep the highest visible
-            // over label, then the most complete circle row for that over.
-            if (parsedOver > latestOverLabel ||
-                (parsedOver === latestOverLabel && rowBalls.length > bestRowBallCount)) {
-                latestOverLabel = parsedOver;
-                latestOverNum = parsedOver - 1;
-                bestRowBallCount = rowBalls.length;
-                activeBalls = rowBalls;
-            }
+            latestOverNum = parsedOver - 1;
+            activeBalls = rowBalls;
         }
     }
 
@@ -927,6 +870,7 @@ EXTRACT_JS = r'''() => {
         }
         const clamped = Math.min(Math.max(legalDeliveries, 1), 6);
         ballNum = `${latestOverNum}.${clamped}`;
+        // seq changes on EVERY delivery, wides and no-balls included
         seq = `${latestOverNum}:${activeBalls.length}`;
         circleVal = activeBalls[activeBalls.length - 1];
         if (legalDeliveries === 6 && !EXTRA_RE.test(circleVal)) {
@@ -939,6 +883,7 @@ EXTRACT_JS = r'''() => {
         if (titleOversMatch) ballNum = titleOversMatch[1];
     }
 
+    // 2. DELIVERY ROW: "<bowler> to <striker>" (skip big wrapper containers)
     const toRe = /([A-Za-z'\-]+(?: [A-Za-z'\-]+){0,3})\s+to\s+([A-Za-z'\-]+(?: [A-Za-z'\-]+){0,3})(?:,|\n|$)/i;
     const commItems = document.querySelectorAll(
         'div[class*="item"], div[class*="update"], div[class*="comm-card"], div[class*="row"]'
@@ -958,6 +903,7 @@ EXTRACT_JS = r'''() => {
         }
     }
 
+    // 3. LIVE DISMISSAL CARD (small containers only, so a page wrapper can never match)
     const allDivs = document.querySelectorAll('div');
     for (const d of allDivs) {
         const txt = d.innerText || '';
@@ -984,6 +930,7 @@ EXTRACT_JS = r'''() => {
         }
     }
 
+    // 4. LIVE SCORE
     const titleScoreMatch = title.match(/([A-Za-z0-9\-]+)\s+(\d{1,3})\s*[-/]\s*([0-9]|10)\s*\(/);
     if (titleScoreMatch) {
         runs = parseInt(titleScoreMatch[2], 10);
@@ -1075,6 +1022,7 @@ async def open_match_page(page: Page, target_url: str) -> None:
 
 
 def is_backwards(prev: Optional[str], cur: Optional[str]) -> bool:
+    """Same over but a lower delivery count = a page glitch, not a new ball."""
     try:
         po, pc = (int(x) for x in (prev or "").split(":"))
         co, cc = (int(x) for x in (cur or "").split(":"))
@@ -1086,18 +1034,12 @@ def is_backwards(prev: Optional[str], cur: Optional[str]) -> bool:
 async def announce_over_end(
     page: Page, announcer: RadioAnnouncer, snap: BallSnapshot, state: MatchState
 ) -> None:
-    over_int = int(snap.ball.split(".")[0]) + 1
-    if over_int in state.announced_overs:
-        log.info("Suppressing duplicate over recap for over %s", over_int)
-        return
-    # Claim it before the wait so repeated page snapshots cannot enqueue it again.
-    state.announced_overs.add(over_int)
-
     await asyncio.sleep(OVER_SETTLE_SECONDS)
     fresh = await extract_circle_balls_data(page)
     runs = fresh.runs if fresh and fresh.runs is not None else snap.runs
     wkts = fresh.wkts if fresh and fresh.wkts is not None else snap.wkts
 
+    over_int = int(snap.ball.split(".")[0]) + 1
     stats = over_stats_from_tokens(snap.over_balls)
     print(f"\n📊 Over {over_int} done | score {runs}/{wkts} | over stats {stats}")
     msg = build_over_summary(over_int, runs, wkts, stats, state.match_overs)
@@ -1123,6 +1065,7 @@ async def handle_new_ball(
         if fresh:
             if fresh.last_dismissal:
                 dismissal_data = fresh.last_dismissal
+            # only quote the score if the wicket count really went up
             if (
                 fresh.runs is not None
                 and fresh.wkts is not None
@@ -1177,6 +1120,7 @@ async def monitor_loop(page: Page, announcer: RadioAnnouncer, state: MatchState)
             else:
                 print_status("⏳ Waiting for circle balls strip to update...")
 
+            # one-time innings-end line (only after we have seen live play)
             if snap:
                 if snap.is_innings_break and not state.innings_break_seen and state.last_key is not None:
                     state.innings_break_seen = True
@@ -1253,7 +1197,7 @@ async def run_live_stream(target_url: str) -> None:
 
 
 # ============================================================
-# DEMO MODE  (python crex_radio_pro.py --demo)
+# DEMO MODE  (python live_commentary.py --demo)
 # ============================================================
 async def run_demo() -> None:
     print("🎧 DEMO MODE - sample commentary, no browser needed\n")
@@ -1289,183 +1233,6 @@ async def run_demo() -> None:
     await announcer.stop()
 
 
-
-# ============================================================
-# WEB-APP COMPATIBILITY ADAPTER
-# The Pro Commentary functions above are kept intact. This adapter
-# lets server.py call the same circle-driven scripts over WebSocket.
-# ============================================================
-def _web_circle_value(info):
-    value = info.get("circle_val")
-    if value is None or str(value).strip() == "":
-        value = info.get("runs", "")
-    return "" if value is None else str(value).strip().upper()
-
-
-def _web_ball_names(info):
-    matchup = str(info.get("matchup") or "").strip()
-    bowler = str(info.get("bowler") or "").strip()
-    batsman = str(info.get("batsman") or info.get("striker") or "").strip()
-    parts = re.split(r"\s+to\s+", matchup, maxsplit=1, flags=re.IGNORECASE)
-    if len(parts) == 2:
-        bowler = parts[0].strip(" ,:.") or bowler
-        batsman = parts[1].strip(" ,:.") or batsman
-    elif "," in matchup:
-        left, right = matchup.split(",", 1)
-        bowler = left.strip(" ,:.") or bowler
-        batsman = re.sub(r"\s*(?:को|to)\s*$", "", right.strip(" ,:."), flags=re.IGNORECASE) or batsman
-    return bowler, batsman
-
-
-def _web_batter_score_suffix(info):
-    """Only used at over end or wicket—not spoken after every delivery."""
-    players = []
-    for prefix in ("striker", "non_striker"):
-        name = str(info.get(prefix) or "").strip()
-        runs = info.get(f"{prefix}_runs")
-        balls = info.get(f"{prefix}_balls")
-        if not name or runs is None or balls is None or name.lower().startswith("batter "):
-            continue
-        try:
-            players.append(f"{name} {int(runs)} off {int(balls)}")
-        except (TypeError, ValueError):
-            continue
-    return ", ".join(players)
-
-
-def build_live_circle_announcement(ball_info, lang="hi"):
-    """Use the uploaded final.py manual scripts; never speak CREX source prose."""
-    info = ball_info or {}
-    token = _web_circle_value(info)
-    if not token:
-        return {"should_speak": False}
-
-    over_label = str(info.get("over") or info.get("ball") or "").strip()
-    bowler, batsman = _web_ball_names(info)
-    dismissal = (
-        info.get("last_dismissal")
-        or info.get("lastDismissal")
-        or info.get("dismissal_card")
-        or None
-    )
-
-    spoken_text, level = generate_circle_ball_commentary(
-        over_label, token, bowler, batsman, dismissal
-    )
-    delivery = classify_delivery(token)
-    kind = delivery["kind"]
-    circle_runs = int(delivery.get("runs", 0) or 0) if kind == "runs" else 0
-    if kind == "runs" and circle_runs == 4:
-        event_kind = "four"
-    elif kind == "runs" and circle_runs == 6:
-        event_kind = "six"
-    else:
-        event_kind = kind
-
-    # Team score is deliberately announced only on a wicket. Routine balls stay short.
-    if kind == "wicket":
-        runs = info.get("total_runs")
-        wickets = info.get("total_wickets")
-        try:
-            spoken_text += f" Score {int(runs)} for {int(wickets)}."
-        except (TypeError, ValueError):
-            pass
-        batter_suffix = _web_batter_score_suffix(info)
-        if batter_suffix:
-            spoken_text += " " + batter_suffix + "."
-
-    badges = {
-        "dot": "DOT BALL",
-        "runs": "RUNS",
-        "four": "FOUR",
-        "six": "SIX",
-        "wide": "WIDE",
-        "noball": "NO BALL",
-        "legbye": "LEG BYE",
-        "bye": "BYE",
-        "wicket": "WICKET",
-    }
-    rate, pitch, _volume = AUDIO_PROFILES[min(max(int(level), 1), 4)]
-    return {
-        "spoken_text": spoken_text,
-        "source_text": "",
-        "should_speak": True,
-        "event": event_kind,
-        "badge": badges.get(event_kind, badges.get(kind, "BALL")),
-        "level": level,
-        "rate": rate,
-        "pitch": pitch,
-        "circle_value": token,
-        "over": over_label,
-    }
-
-
-def build_live_over_summary(over_index, balls, score_state=None, lang="hinglish"):
-    """Use the attached Pro Commentary over recap and speak score at over end only."""
-    unique = []
-    seen = set()
-    for ball in balls or []:
-        if not isinstance(ball, dict):
-            continue
-        raw_token = ball.get("circle_val")
-        if raw_token is None or str(raw_token).strip() == "":
-            raw_token = ball.get("runs")
-        token = "" if raw_token is None else str(raw_token).strip().upper()
-        over = str(ball.get("over") or "").strip()
-        key = (over, token, str(ball.get("matchup") or "").strip().lower())
-        if key in seen:
-            continue
-        seen.add(key)
-        unique.append(token)
-
-    stats = over_stats_from_tokens(unique)
-    score_state = score_state or {}
-    total_runs = score_state.get("total_runs")
-    total_wickets = score_state.get("total_wickets")
-    try:
-        spoken_over = int(over_index) + 1
-    except (TypeError, ValueError):
-        spoken_over = 1
-
-    # The source function owns the manual score phrasing; pass team score here,
-    # not each ball's score, so score is spoken only at over completion.
-    summary = build_over_summary(
-        spoken_over,
-        total_runs if total_runs is not None else 0,
-        total_wickets if total_wickets is not None else 0,
-        stats,
-        None,
-    )
-    batter_suffix = _web_batter_score_suffix(score_state)
-    if batter_suffix:
-        summary += " Batters: " + batter_suffix + "."
-    return summary
-
-
-class _WebCommentatorAdapter:
-    """Thin compatibility layer for server.py; reuses the uploaded Pro scripts."""
-    def classify(self, text="", runs=""):
-        token = str(runs or "").strip().upper()
-        delivery = classify_delivery(token)
-        level = 4 if delivery["kind"] == "wicket" or token == "6" else 3 if token == "4" else 2 if delivery["kind"] not in ("dot",) else 1
-        rate, pitch, _volume = AUDIO_PROFILES[level]
-        return {
-            "event": delivery["kind"],
-            "badge": delivery["kind"].upper(),
-            "rate": rate,
-            "pitch": pitch,
-            "should_speak": bool(token),
-        }
-
-    def humanize(self, raw_text="", ball_info=None, lang="hi", gemini_api_key=None):
-        return build_live_circle_announcement(ball_info or {}, lang=lang)
-
-    async def humanize_async(self, raw_text="", ball_info=None, lang="hi", gemini_api_key=None):
-        return self.humanize(raw_text, ball_info=ball_info, lang=lang, gemini_api_key=gemini_api_key)
-
-
-commentator = _WebCommentatorAdapter()
-
 def main() -> None:
     logging.basicConfig(
         level=logging.DEBUG if DEBUG else logging.INFO,
@@ -1495,7 +1262,6 @@ def main() -> None:
         print("\n\n🛑 Script stopped by user.")
     except Exception:
         traceback.print_exc()
-        input("\nPress ENTER to close...")
 
 
 if __name__ == "__main__":
