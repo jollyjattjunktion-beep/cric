@@ -37,7 +37,7 @@ from pydub import AudioSegment
 from pydub.effects import normalize
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from human_commentator import commentator
+from final import commentator
 
 logging.basicConfig(
     level=logging.INFO,
