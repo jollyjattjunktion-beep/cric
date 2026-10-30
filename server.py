@@ -29,7 +29,7 @@ except ImportError:  # REST/HTML feed remains a fallback if Chromium is unavaila
 
 # Import existing core modules
 from cricket_streamer import CrexParser, create_tts, get_live_matches, resolve_match_url
-from human_commentator import commentator, number_to_hindi_words, over_ordinal_hindi
+from final import commentator, number_to_hindi_words, over_ordinal_hindi
 from final import build_live_circle_announcement, build_live_over_summary, prepare_tts_pronunciation_text
 
 logging.basicConfig(
