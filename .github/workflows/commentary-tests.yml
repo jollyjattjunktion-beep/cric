@@ -19,4 +19,4 @@ jobs:
       - name: Compile Python modules
         run: python -m py_compile server.py final.py human_commentator.py cricket_streamer.py
       - name: Run commentary regression tests
-        run: python -m unittest -v test_finalpy_adapter test_hinglish_commentary test_server_over_completion
+        run: python -m unittest -v test_finalpy_adapter test_hinglish_commentary test_server_over_completion test_voicestudio_tts
