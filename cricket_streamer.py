@@ -1141,7 +1141,10 @@ class SarvamTTS:
 
 def create_tts(language: str = "en", voice: Optional[str] = None, provider: str = "edge",
                 api_key: Optional[str] = None, speaker: Optional[str] = None):
-    """Builds the configured TTS engine: Edge neural voices (default, free) or Sarvam AI."""
+    """Build the selected TTS engine without changing the existing Edge/Sarvam paths."""
+    if provider == "voicestudio":
+        from voicestudio_tts import VoiceStudioTTS
+        return VoiceStudioTTS(language=language, voice=voice)
     if provider == "sarvam" and api_key:
         return SarvamTTS(api_key=api_key, language=language, speaker=speaker)
     return FastTTS(language=language, voice=voice)
