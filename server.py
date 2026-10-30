@@ -1756,7 +1756,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "voicestudio-integration-20261030-1",
+        "server_build": "svara-provider-20261030-1",
     })
 
 async def handle_api_health(request: web.Request) -> web.Response:
@@ -1816,6 +1816,11 @@ async def handle_api_start(request: web.Request) -> web.Response:
         if tts_provider == "sarvam" and not tts_api_key:
             hub.latest_start_debug.update({"status": "rejected", "phase": "validation", "error": "Sarvam API key is required"})
             return web.json_response({"ok": False, "error": "Sarvam API key is required to use the Sarvam voice engine"}, status=400)
+
+        if tts_provider == "svara" and not os.getenv("SVARA_BASE_URL", "").strip():
+            message = "Svara provider is not configured: set SVARA_BASE_URL in the server environment"
+            hub.latest_start_debug.update({"status": "rejected", "phase": "validation", "error": message})
+            return web.json_response({"ok": False, "error": message}, status=400)
 
         if tts_provider == "voicestudio":
             missing_voice_config = [

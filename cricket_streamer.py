@@ -1145,6 +1145,9 @@ def create_tts(language: str = "en", voice: Optional[str] = None, provider: str 
     if provider == "voicestudio":
         from voicestudio_tts import VoiceStudioTTS
         return VoiceStudioTTS(language=language, voice=voice)
+    if provider == "svara":
+        from svara_tts import SvaraTTS
+        return SvaraTTS(language=language, voice=speaker or voice)
     if provider == "sarvam" and api_key:
         return SarvamTTS(api_key=api_key, language=language, speaker=speaker)
     return FastTTS(language=language, voice=voice)

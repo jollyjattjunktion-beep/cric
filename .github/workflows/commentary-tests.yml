@@ -17,6 +17,6 @@ jobs:
       - name: Install project dependencies
         run: python -m pip install -r requirements.txt
       - name: Compile Python modules
-        run: python -m py_compile server.py final.py human_commentator.py cricket_streamer.py voicestudio_tts.py test_voicestudio_tts.py
+        run: python -m py_compile server.py final.py human_commentator.py cricket_streamer.py voicestudio_tts.py svara_tts.py test_voicestudio_tts.py test_svara_tts.py
       - name: Run commentary regression tests
-        run: python -m unittest -v test_finalpy_adapter test_hinglish_commentary test_server_over_completion test_voicestudio_tts
+        run: python -m unittest -v test_finalpy_adapter test_hinglish_commentary test_server_over_completion test_voicestudio_tts test_svara_tts

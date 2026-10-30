@@ -49,6 +49,7 @@
   const sarvamKeyGroup = document.getElementById("sarvamKeyGroup");
   const sarvamApiKeyInput = document.getElementById("sarvamApiKey");
   const voiceStudioInfo = document.getElementById("voiceStudioInfo");
+  const svaraInfo = document.getElementById("svaraInfo");
 
   const onAirBadge = document.getElementById("onAirBadge");
   const onAirText = document.getElementById("onAirText");
@@ -113,6 +114,9 @@
       }
       if (voiceStudioInfo) {
         voiceStudioInfo.classList.toggle("hidden", voiceEngineSelect.value !== "voicestudio");
+      }
+      if (svaraInfo) {
+        svaraInfo.classList.toggle("hidden", voiceEngineSelect.value !== "svara");
       }
     };
     voiceEngineSelect.addEventListener("change", updateVoiceProviderFields);
