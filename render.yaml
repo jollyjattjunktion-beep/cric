@@ -61,3 +61,7 @@ services:
         generateValue: true
       - key: OMNIVOICE_ANALYTICS_DISABLED
         value: "1"
+      - key: PORT
+        value: "3900"
+      - key: OMNIVOICE_PORT
+        value: "3900"
