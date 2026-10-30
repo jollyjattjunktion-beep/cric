@@ -852,6 +852,13 @@ class BroadcastHub:
             parser = CrexParser(url, lang=lang)
         tts = create_tts(language=lang, provider=tts_provider,
                          api_key=tts_api_key or None, speaker=tts_speaker or None)
+        try:
+            tts_timeout_seconds = (
+                max(5.0, float(os.getenv("VOICESTUDIO_TTS_TIMEOUT_SECONDS", "30")))
+                if tts_provider == "voicestudio" else 4.5
+            )
+        except ValueError:
+            tts_timeout_seconds = 30.0 if tts_provider == "voicestudio" else 4.5
 
         # At most one waiting event. New source deliveries replace any not-yet-played event.
         ball_queue: asyncio.Queue = asyncio.Queue(maxsize=1)
@@ -1058,7 +1065,7 @@ class BroadcastHub:
             try:
                 mp3_data = await asyncio.wait_for(
                     tts.speak_mp3(text, rate=rate, pitch=pitch),
-                    timeout=4.5,
+                    timeout=tts_timeout_seconds,
                 )
             except asyncio.TimeoutError:
                 logger.warning("TTS timed out for event type %s", kind)
@@ -1075,7 +1082,7 @@ class BroadcastHub:
             try:
                 mp3_data = await asyncio.wait_for(
                     tts.speak_mp3(recap_tts_text, rate="+20%", pitch="+4Hz"),
-                    timeout=4.5,
+                    timeout=tts_timeout_seconds,
                 )
             except asyncio.TimeoutError:
                 logger.warning("Over recap %s TTS timed out; retaining it for retry", recap_id)
@@ -1192,7 +1199,7 @@ class BroadcastHub:
                     next_delivery_task = asyncio.create_task(ball_queue.get())
                     done, _ = await asyncio.wait(
                         {tts_task, next_delivery_task},
-                        timeout=4.5,
+                        timeout=tts_timeout_seconds,
                         return_when=asyncio.FIRST_COMPLETED,
                     )
 
@@ -1232,7 +1239,7 @@ class BroadcastHub:
                         event_id = current_event.get("event_id") or f"{ball_over}|{circle_token}"
                         self.latest_tts_debug.update({
                             "status": "timeout",
-                            "error": "Edge TTS exceeded the 4.5-second low-latency limit; browser fallback is available",
+                            "error": f"TTS exceeded the {tts_timeout_seconds:.1f}-second synthesis limit; browser fallback is available",
                             "event_id": event_id,
                             "over": ball_over,
                             "circle_value": circle_token,
@@ -1243,7 +1250,7 @@ class BroadcastHub:
                                 "event_id": event_id,
                                 "over": ball_over,
                                 "circle_value": circle_token,
-                                "message": "Edge Madhur did not return audio within 4.5 seconds",
+                                "message": f"TTS engine did not return audio within {tts_timeout_seconds:.1f} seconds",
                             })
                         except Exception:
                             pass
@@ -1809,6 +1816,16 @@ async def handle_api_start(request: web.Request) -> web.Response:
         if tts_provider == "sarvam" and not tts_api_key:
             hub.latest_start_debug.update({"status": "rejected", "phase": "validation", "error": "Sarvam API key is required"})
             return web.json_response({"ok": False, "error": "Sarvam API key is required to use the Sarvam voice engine"}, status=400)
+
+        if tts_provider == "voicestudio":
+            missing_voice_config = [
+                key for key in ("VOICESTUDIO_BASE_URL", "VOICESTUDIO_API_KEY", "VOICESTUDIO_VOICE_ID")
+                if not os.getenv(key, "").strip()
+            ]
+            if missing_voice_config:
+                message = "VoiceStudio is not configured in the server environment: " + ", ".join(missing_voice_config)
+                hub.latest_start_debug.update({"status": "rejected", "phase": "validation", "error": message})
+                return web.json_response({"ok": False, "error": message}, status=400)
 
         hub.latest_start_debug.update({"status": "calling_broadcast", "phase": "hub.start_broadcast"})
         res = await hub.start_broadcast(url=url, lang=lang, stream_key=stream_key,
