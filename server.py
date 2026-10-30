@@ -1756,7 +1756,7 @@ async def handle_api_status(request: web.Request) -> web.Response:
         "feed_debug": hub.latest_feed_debug,
         "tts_debug": hub.latest_tts_debug,
         "start_debug": hub.latest_start_debug,
-        "server_build": "circle-audio-fast-20261023-2-pronunciation",
+        "server_build": "voicestudio-integration-20261030-1",
     })
 
 async def handle_api_health(request: web.Request) -> web.Response:
