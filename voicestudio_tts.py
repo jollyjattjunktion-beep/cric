@@ -6,6 +6,7 @@ MP3 bytes and speak() returns 44.1 kHz stereo PCM bytes.
 """
 from __future__ import annotations
 
+import html
 import io
 import logging
 import os
@@ -16,6 +17,20 @@ from urllib.parse import urlsplit
 import aiohttp
 
 logger = logging.getLogger("PreetSports.VoiceStudio")
+
+
+def _sanitize_for_speech(text: str) -> str:
+    """Keep VoiceStudio input cleanup local; do not import the full cricket runner."""
+    if not text:
+        return ""
+    clean = html.unescape(str(text))
+    clean = re.sub(r"<[^>]+>", "", clean)
+    clean = re.sub(r"[|*_~^#@\x60•‣▪●→➤]+", " ", clean)
+    clean = re.sub(r"([.,!?;:\\-])\\1+", r"\\1", clean)
+    clean = re.sub(r"[\\(\\[\\{]\\s*[\\)\\]\\}]", "", clean)
+    clean = re.sub(r"\\s+([.,!?;:])", r"\\1", clean)
+    clean = re.sub(r"([.,!?;:])(?=[^\\s.,!?;:])", r"\\1 ", clean)
+    return re.sub(r"\\s{2,}", " ", clean).strip()
 
 
 class VoiceStudioTTS:
@@ -88,9 +103,7 @@ class VoiceStudioTTS:
         pitch: Optional[str] = None,
     ) -> bytes:
         """Synthesize one commentary line and return MP3 bytes."""
-        from cricket_streamer import sanitize_for_speech
-
-        clean_text = sanitize_for_speech(text)
+        clean_text = _sanitize_for_speech(text)
         if not clean_text:
             return b""
         if len(clean_text) > 4096:
