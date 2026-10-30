@@ -26,11 +26,11 @@ def _sanitize_for_speech(text: str) -> str:
     clean = html.unescape(str(text))
     clean = re.sub(r"<[^>]+>", "", clean)
     clean = re.sub(r"[|*_~^#@\x60•‣▪●→➤]+", " ", clean)
-    clean = re.sub(r"([.,!?;:\\-])\\1+", r"\\1", clean)
-    clean = re.sub(r"[\\(\\[\\{]\\s*[\\)\\]\\}]", "", clean)
-    clean = re.sub(r"\\s+([.,!?;:])", r"\\1", clean)
-    clean = re.sub(r"([.,!?;:])(?=[^\\s.,!?;:])", r"\\1 ", clean)
-    return re.sub(r"\\s{2,}", " ", clean).strip()
+    clean = re.sub(r"([.,!?;:\-])\1+", r"\1", clean)
+    clean = re.sub(r"[\(\[\{]\s*[\)\]\}]", "", clean)
+    clean = re.sub(r"\s+([.,!?;:])", r"\1", clean)
+    clean = re.sub(r"([.,!?;:])(?=[^\s.,!?;:])", r"\1 ", clean)
+    return re.sub(r"\s{2,}", " ", clean).strip()
 
 
 class VoiceStudioTTS:
