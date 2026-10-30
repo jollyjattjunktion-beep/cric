@@ -89,6 +89,7 @@
           <select id="voiceEngineSelect">
             <option value="edge" selected>Edge Neural (Free, Default)</option>
             <option value="sarvam">Sarvam AI (Male Voice)</option>
+            <option value="voicestudio">VoiceStudio — Preet's Cloned Voice</option>
           </select>
         </div>
         <div class="input-group gemini-key-group" id="geminiKeyGroup">
@@ -98,6 +99,9 @@
         <div class="input-group sarvam-key-group hidden" id="sarvamKeyGroup">
           <label for="sarvamApiKey">Sarvam API Key</label>
           <input type="password" id="sarvamApiKey" placeholder="Paste your Sarvam API subscription key">
+        </div>
+        <div class="input-group hidden" id="voiceStudioInfo">
+          <small>Uses your saved Preet voice profile on the secure VoiceStudio service. Configure the profile ID in Render; no key is entered here. IMPORTANT: VoiceStudio's default OmniVoice model is non-commercial. Do not use its audio in monetized YouTube broadcasts until the complete model stack is commercially cleared.</small>
         </div>
       </div>
       <div class="control-actions">
@@ -245,6 +249,6 @@
     <span>Cricket AI Broadcast Engine • Powered by Neural TTS & Fast Scraper • Ready for Railway & YouTube Live</span>
   </footer>
 
-  <script src="/static/app.js?v=circle-audio-fast-20261023-1"></script>
+  <script src="/static/app.js?v=voicestudio-provider-20261030-1"></script>
 </body>
 </html>

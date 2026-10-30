@@ -48,6 +48,7 @@
   const voiceEngineSelect = document.getElementById("voiceEngineSelect");
   const sarvamKeyGroup = document.getElementById("sarvamKeyGroup");
   const sarvamApiKeyInput = document.getElementById("sarvamApiKey");
+  const voiceStudioInfo = document.getElementById("voiceStudioInfo");
 
   const onAirBadge = document.getElementById("onAirBadge");
   const onAirText = document.getElementById("onAirText");
@@ -99,16 +100,23 @@
     } catch (_) {}
   }
 
-  // Voice Engine Selector: reveal the Sarvam API key field only when selected
-  if (voiceEngineSelect && sarvamKeyGroup) {
+  // Voice Engine Selector: show only the settings needed by the selected provider.
+  if (voiceEngineSelect) {
     try {
       const savedKey = localStorage.getItem("sarvamApiKey");
       if (savedKey && sarvamApiKeyInput) sarvamApiKeyInput.value = savedKey;
     } catch (_) {}
 
-    voiceEngineSelect.addEventListener("change", () => {
-      sarvamKeyGroup.classList.toggle("hidden", voiceEngineSelect.value !== "sarvam");
-    });
+    const updateVoiceProviderFields = () => {
+      if (sarvamKeyGroup) {
+        sarvamKeyGroup.classList.toggle("hidden", voiceEngineSelect.value !== "sarvam");
+      }
+      if (voiceStudioInfo) {
+        voiceStudioInfo.classList.toggle("hidden", voiceEngineSelect.value !== "voicestudio");
+      }
+    };
+    voiceEngineSelect.addEventListener("change", updateVoiceProviderFields);
+    updateVoiceProviderFields();
   }
 
   // 1. WebSocket Connection

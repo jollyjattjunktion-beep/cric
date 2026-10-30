@@ -13,6 +13,20 @@ services:
         value: 1
       - key: SARVAM_API_KEY
         sync: false
+      - key: VOICESTUDIO_BASE_URL
+        fromService:
+          name: preet-voicestudio
+          type: web
+          property: hostport
+      - key: VOICESTUDIO_API_KEY
+        fromService:
+          name: preet-voicestudio
+          type: web
+          envVarKey: OMNIVOICE_API_KEY
+      - key: VOICESTUDIO_MODEL
+        value: omnivoice
+      - key: VOICESTUDIO_TTS_TIMEOUT_SECONDS
+        value: "30"
 
   - type: web
     name: preet-sports-radio-web
@@ -27,3 +41,27 @@ services:
         value: 10000
       - key: PYTHONUNBUFFERED
         value: 1
+
+  # VoiceStudio's official prebuilt Docker image. The public UI is protected
+  # by OMNIVOICE_API_KEY; Preet Sports calls it over Render's private network.
+  - type: web
+    name: preet-voicestudio
+    runtime: image
+    plan: 2c-8g
+    region: oregon
+    image:
+      url: ghcr.io/debpalash/voicestudio:stable
+    healthCheckPath: /health
+    disk:
+      name: preet-voicestudio-data
+      mountPath: /app/omnivoice_data
+      sizeGB: 10
+    envVars:
+      - key: OMNIVOICE_API_KEY
+        generateValue: true
+      - key: OMNIVOICE_ANALYTICS_DISABLED
+        value: "1"
+      - key: PORT
+        value: "3900"
+      - key: OMNIVOICE_PORT
+        value: "3900"
