@@ -97,9 +97,9 @@ class VoiceStudioAdapterTests(unittest.IsolatedAsyncioTestCase):
         client = self.make_client()
         session = FakeSession(FakeResponse(status=401, body=b"", text="unauthorized"))
         with patch("aiohttp.ClientSession", return_value=session):
-            with self.assertRaisesRegex(RuntimeError, "HTTP 401"):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 401") as raised:
                 await client.speak_mp3("Test line")
-        self.assertNotIn("test-token", str(session.request))
+        self.assertNotIn("test-token", str(raised.exception))
 
 
 if __name__ == "__main__":
